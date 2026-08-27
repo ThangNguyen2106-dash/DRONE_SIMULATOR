@@ -1,0 +1,10 @@
+{
+  "system_id": 1,
+  "component_id": 1,
+  "tx_host": "127.0.0.1",
+  "tx_port": 14550,
+  "rx_host": "0.0.0.0",
+  "rx_port": 14551,
+  "telemetry_rate_hz": 20,
+  "home": {"lat": 10.8231, "lon": 106.6297, "alt": 0.0}
+}
