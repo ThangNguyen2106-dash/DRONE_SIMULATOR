@@ -1236,16 +1236,13 @@ class MAVLinkTelemetry:
         else:
 
             try:
-
-                current_seq = (
-                    int(current_waypoint) - 1
+                wp_obj = self.drone.mission.get_waypoint(
+                    int(current_waypoint)
                 )
-
-            except (
-                TypeError,
-                ValueError,
-            ):
-
+                current_seq = int(
+                    getattr(wp_obj, "source_seq", int(current_waypoint) - 1)
+                )
+            except Exception:
                 current_seq = None
 
         # ====================================================

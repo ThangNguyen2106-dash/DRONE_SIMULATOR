@@ -1501,6 +1501,21 @@ class SimulationWorker(QThread):
                         message
                     )
 
+                    # If GCS uploads a mission while the simulated
+                    # vehicle is already ARMED + AUTO, start it immediately.
+                    # This mirrors a real vehicle receiving a fresh mission.
+                    if (
+                        self.drone is not None
+                        and self.drone.flight_mode.value == "MISSION"
+                        and self.drone.state.armed
+                        and self.drone.mission.count() > 0
+                        and not self.drone.mission_navigator.is_active()
+                        and not self.drone.mission_navigator.is_completed()
+                    ):
+                        self.drone.mission_navigator.start()
+                        self.drone.state.airborne = True
+                        print("[MISSION] Uploaded mission is now ACTIVE")
+
                 except Exception as exc:
 
                     print(

@@ -103,37 +103,11 @@ class Drone:
         self,
         mode,
     ) -> bool:
-        """
-        Change simulation mode at runtime.
-
-        FREE:
-            Manual/runtime flight control.
-
-        MISSION:
-            Follow the loaded MAVLink mission.
-
-        ALT_HOLD:
-            Maintain target altitude.
-        """
-
-        if isinstance(
-            mode,
-            FlightMode,
-        ):
-
+        """Change the simulator flight mode safely."""
+        if isinstance(mode, FlightMode):
             new_mode = mode
-
-        elif isinstance(
-            mode,
-            str,
-        ):
-
-            mode_text = (
-                mode.strip().upper()
-            )
-
-            # Support some common aliases.
-
+        elif isinstance(mode, str):
+            mode_text = mode.strip().upper()
             aliases = {
                 "FREE_FLIGHT": "FREE",
                 "GUIDED": "FREE",
@@ -141,100 +115,46 @@ class Drone:
                 "ALTITUDE HOLD": "ALT_HOLD",
                 "AUTO": "MISSION",
             }
-
-            mode_text = aliases.get(
-                mode_text,
-                mode_text,
-            )
-
+            mode_text = aliases.get(mode_text, mode_text)
             try:
-
-                new_mode = FlightMode(
-                    mode_text
-                )
-
+                new_mode = FlightMode(mode_text)
             except ValueError:
-
                 return False
-
         else:
-
             return False
 
         with self.state.lock:
-
-            # ------------------------------------------------
-            # MISSION mode requires a mission.
-            # ------------------------------------------------
-
             if new_mode == FlightMode.MISSION:
-
                 if self.mission.count() <= 0:
-
-                    return False
-
-                if not self.state.armed:
-
-                    return False
+                    # AUTO can be selected before upload; execution starts
+                    # automatically once a mission is available.
+                    self.flight_mode = FlightMode.MISSION
+                    self.state.mode = "AUTO"
+                    self.rtl_active = False
+                    return True
 
                 self.rtl_active = False
-
-                if not (
-                    self.mission_navigator.is_active()
-                ):
-
-                    if not self.mission_navigator.start():
-
-                        return False
-
-                self.flight_mode = (
-                    FlightMode.MISSION
-                )
-
+                self.flight_mode = FlightMode.MISSION
                 self.state.mode = "AUTO"
 
-                self.state.airborne = True
-
+                if self.state.armed and not self.mission_navigator.is_active():
+                    if not self.mission_navigator.start():
+                        return False
+                    self.state.airborne = True
                 return True
 
-            # ------------------------------------------------
-            # Leaving mission.
-            # ------------------------------------------------
-
+            # Any non-mission mode stops mission execution.
             self.mission_navigator.stop()
-
-            # ------------------------------------------------
-            # Leaving RTL.
-            # ------------------------------------------------
-
             self.rtl_active = False
 
-            # ------------------------------------------------
-            # FREE
-            # ------------------------------------------------
-
             if new_mode == FlightMode.FREE:
-
-                self.flight_mode = (
-                    FlightMode.FREE
-                )
-
+                self.flight_mode = FlightMode.FREE
                 self.state.mode = "GUIDED"
-
                 return True
 
-            # ------------------------------------------------
-            # ALT HOLD
-            # ------------------------------------------------
-
             if new_mode == FlightMode.ALT_HOLD:
-
-                self.flight_mode = (
-                    FlightMode.ALT_HOLD
-                )
-
+                self.flight_mode = FlightMode.ALT_HOLD
                 self.state.mode = "ALT_HOLD"
-
                 return True
 
         return False
@@ -328,6 +248,25 @@ class Drone:
                 return True
 
             self.state.armed = True
+
+            # ------------------------------------------------
+            # Automatically start mission if MISSION mode
+            # was selected before ARM.
+            # ------------------------------------------------
+
+            if (
+                self.flight_mode == FlightMode.MISSION
+                and
+                self.mission.count() > 0
+            ):
+
+                if not self.mission_navigator.is_active():
+
+                    self.mission_navigator.start()
+
+                self.state.mode = "AUTO"
+
+                self.state.airborne = True
 
             if self.state.mode in (
                 "STANDBY",
@@ -1239,6 +1178,7 @@ class Drone:
                 lat=self.state.lat,
                 lon=self.state.lon,
                 alt=self.state.alt,
+                sim_time=self.state.sim_time,
             )
         )
 

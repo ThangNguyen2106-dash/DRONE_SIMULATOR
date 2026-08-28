@@ -1,3 +1,4 @@
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QGroupBox,
     QFormLayout,
@@ -5,12 +6,21 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QSpinBox,
     QDoubleSpinBox,
+    QLabel,
 )
 
 
 class MAVLinkConfigPanel(QGroupBox):
 
-    def __init__(self, parent=None):
+    # ========================================================
+    # INIT
+    # ========================================================
+
+    def __init__(
+        self,
+        parent=None,
+    ):
+
         super().__init__(
             "MAVLINK CONFIGURATION",
             parent,
@@ -43,9 +53,14 @@ class MAVLinkConfigPanel(QGroupBox):
 
         self.connection_type = QComboBox()
 
-        # Hiện tại simulator chỉ dùng UDP.
-        self.connection_type.addItem(
-            "UDP"
+        self.connection_type.addItems([
+            "UDP",
+            "TCP",
+            "SERIAL",
+        ])
+
+        self.connection_type.currentTextChanged.connect(
+            self._on_connection_type_changed
         )
 
         layout.addRow(
@@ -54,42 +69,120 @@ class MAVLinkConfigPanel(QGroupBox):
         )
 
         # ====================================================
-        # IP ADDRESS
+        # TX HOST
         # ====================================================
 
-        self.ip_address = QLineEdit()
+        self.tx_host = QLineEdit()
 
-        self.ip_address.setText(
+        self.tx_host.setText(
             "127.0.0.1"
         )
 
-        self.ip_address.setPlaceholderText(
+        self.tx_host.setPlaceholderText(
             "127.0.0.1"
         )
 
         layout.addRow(
-            "IP Address:",
-            self.ip_address,
+            "TX Host:",
+            self.tx_host,
         )
 
         # ====================================================
-        # PORT
+        # TX PORT
         # ====================================================
 
-        self.port = QSpinBox()
+        self.tx_port = QSpinBox()
 
-        self.port.setRange(
+        self.tx_port.setRange(
             1,
             65535,
         )
 
-        self.port.setValue(
+        self.tx_port.setValue(
             14550
         )
 
         layout.addRow(
-            "Port:",
-            self.port,
+            "TX Port:",
+            self.tx_port,
+        )
+
+        # ====================================================
+        # RX HOST
+        # ====================================================
+
+        self.rx_host = QLineEdit()
+
+        self.rx_host.setText(
+            "0.0.0.0"
+        )
+
+        self.rx_host.setPlaceholderText(
+            "0.0.0.0"
+        )
+
+        layout.addRow(
+            "RX Host:",
+            self.rx_host,
+        )
+
+        # ====================================================
+        # RX PORT
+        # ====================================================
+
+        self.rx_port = QSpinBox()
+
+        self.rx_port.setRange(
+            1,
+            65535,
+        )
+
+        self.rx_port.setValue(
+            14560
+        )
+
+        layout.addRow(
+            "RX Port:",
+            self.rx_port,
+        )
+
+        # ====================================================
+        # SERIAL DEVICE
+        # ====================================================
+
+        self.serial_device = QLineEdit()
+
+        self.serial_device.setText(
+            "COM3"
+        )
+
+        self.serial_device.setPlaceholderText(
+            "COM3"
+        )
+
+        layout.addRow(
+            "Serial Device:",
+            self.serial_device,
+        )
+
+        # ====================================================
+        # BAUDRATE
+        # ====================================================
+
+        self.baudrate = QSpinBox()
+
+        self.baudrate.setRange(
+            1200,
+            4000000,
+        )
+
+        self.baudrate.setValue(
+            115200
+        )
+
+        layout.addRow(
+            "Baudrate:",
+            self.baudrate,
         )
 
         # ====================================================
@@ -136,27 +229,29 @@ class MAVLinkConfigPanel(QGroupBox):
         # TELEMETRY RATE
         # ====================================================
 
-        self.telemetry_rate = QDoubleSpinBox()
-
-        self.telemetry_rate.setDecimals(
-            1
+        self.telemetry_rate = (
+            QDoubleSpinBox()
         )
 
         self.telemetry_rate.setRange(
-            1.0,
-            100.0,
+            0.1,
+            200.0,
+        )
+
+        self.telemetry_rate.setDecimals(
+            1
         )
 
         self.telemetry_rate.setSingleStep(
             1.0
         )
 
-        self.telemetry_rate.setSuffix(
-            " Hz"
-        )
-
         self.telemetry_rate.setValue(
             20.0
+        )
+
+        self.telemetry_rate.setSuffix(
+            " Hz"
         )
 
         layout.addRow(
@@ -164,24 +259,329 @@ class MAVLinkConfigPanel(QGroupBox):
             self.telemetry_rate,
         )
 
+        # ====================================================
+        # MAVLINK VERSION
+        # ====================================================
+
+        self.mavlink_version = QComboBox()
+
+        self.mavlink_version.addItems([
+            "AUTO",
+            "MAVLink 1",
+            "MAVLink 2",
+        ])
+
+        self.mavlink_version.setCurrentText(
+            "MAVLink 2"
+        )
+
+        layout.addRow(
+            "MAVLink Version:",
+            self.mavlink_version,
+        )
+
+        # ====================================================
+        # TARGET SYSTEM
+        # ====================================================
+
+        self.target_system = QSpinBox()
+
+        self.target_system.setRange(
+            0,
+            255,
+        )
+
+        self.target_system.setValue(
+            0
+        )
+
+        layout.addRow(
+            "Target System:",
+            self.target_system,
+        )
+
+        # ====================================================
+        # TARGET COMPONENT
+        # ====================================================
+
+        self.target_component = QSpinBox()
+
+        self.target_component.setRange(
+            0,
+            255,
+        )
+
+        self.target_component.setValue(
+            0
+        )
+
+        layout.addRow(
+            "Target Component:",
+            self.target_component,
+        )
+
+        # ====================================================
+        # CONNECTION STRING
+        # ====================================================
+
+        self.connection_string = QLineEdit()
+
+        self.connection_string.setPlaceholderText(
+            "Generated automatically"
+        )
+
+        self.connection_string.setReadOnly(
+            True
+        )
+
+        layout.addRow(
+            "Connection String:",
+            self.connection_string,
+        )
+
+        # ====================================================
+        # STATUS
+        # ====================================================
+
+        self.config_status = QLabel(
+            "UDP configuration"
+        )
+
+        self.config_status.setStyleSheet(
+            """
+            QLabel {
+                padding: 4px;
+            }
+            """
+        )
+
+        layout.addRow(
+            "Status:",
+            self.config_status,
+        )
+
         self.setLayout(
             layout
         )
+
+        # ====================================================
+        # INITIAL UPDATE
+        # ====================================================
+
+        self._update_connection_string()
+
+    # ========================================================
+    # CONNECTION TYPE
+    # ========================================================
+
+    def _on_connection_type_changed(
+        self,
+        connection_type,
+    ):
+
+        connection_type = str(
+            connection_type
+        ).upper()
+
+        is_serial = (
+            connection_type
+            == "SERIAL"
+        )
+
+        # ----------------------------------------------------
+        # UDP / TCP
+        # ----------------------------------------------------
+
+        self.tx_host.setEnabled(
+            not is_serial
+        )
+
+        self.tx_port.setEnabled(
+            not is_serial
+        )
+
+        self.rx_host.setEnabled(
+            connection_type
+            == "UDP"
+        )
+
+        self.rx_port.setEnabled(
+            connection_type
+            == "UDP"
+        )
+
+        # ----------------------------------------------------
+        # Serial
+        # ----------------------------------------------------
+
+        self.serial_device.setEnabled(
+            is_serial
+        )
+
+        self.baudrate.setEnabled(
+            is_serial
+        )
+
+        self._update_connection_string()
+
+    # ========================================================
+    # UPDATE CONNECTION STRING
+    # ========================================================
+
+    def _update_connection_string(
+        self,
+    ):
+
+        connection_type = (
+            self.connection_type
+            .currentText()
+            .upper()
+        )
+
+        # ====================================================
+        # UDP
+        # ====================================================
+
+        if connection_type == "UDP":
+
+            host = (
+                self.tx_host
+                .text()
+                .strip()
+            )
+
+            if not host:
+
+                host = "127.0.0.1"
+
+            port = (
+                self.tx_port.value()
+            )
+
+            connection_string = (
+                f"udpout:{host}:{port}"
+            )
+
+            self.connection_string.setText(
+                connection_string
+            )
+
+            self.config_status.setText(
+                "UDP TX/RX configuration"
+            )
+
+            return
+
+        # ====================================================
+        # TCP
+        # ====================================================
+
+        if connection_type == "TCP":
+
+            host = (
+                self.tx_host
+                .text()
+                .strip()
+            )
+
+            if not host:
+
+                host = "127.0.0.1"
+
+            port = (
+                self.tx_port.value()
+            )
+
+            connection_string = (
+                f"tcp:{host}:{port}"
+            )
+
+            self.connection_string.setText(
+                connection_string
+            )
+
+            self.config_status.setText(
+                "TCP configuration"
+            )
+
+            return
+
+        # ====================================================
+        # SERIAL
+        # ====================================================
+
+        if connection_type == "SERIAL":
+
+            device = (
+                self.serial_device
+                .text()
+                .strip()
+            )
+
+            if not device:
+
+                device = "COM3"
+
+            baudrate = (
+                self.baudrate.value()
+            )
+
+            connection_string = (
+                f"{device}:{baudrate}"
+            )
+
+            self.connection_string.setText(
+                connection_string
+            )
+
+            self.config_status.setText(
+                "Serial configuration"
+            )
+
+            return
 
     # ========================================================
     # GET CONFIG
     # ========================================================
 
-    def get_config(self):
+    def get_config(
+        self,
+    ):
 
-        ip_address = (
-            self.ip_address.text().strip()
+        connection_type = (
+            self.connection_type
+            .currentText()
+            .strip()
+            .upper()
         )
 
-        if not ip_address:
-            ip_address = "127.0.0.1"
+        tx_host = (
+            self.tx_host
+            .text()
+            .strip()
+        )
 
-        port = self.port.value()
+        if not tx_host:
+
+            tx_host = "127.0.0.1"
+
+        rx_host = (
+            self.rx_host
+            .text()
+            .strip()
+        )
+
+        if not rx_host:
+
+            rx_host = "0.0.0.0"
+
+        tx_port = (
+            self.tx_port.value()
+        )
+
+        rx_port = (
+            self.rx_port.value()
+        )
 
         system_id = (
             self.system_id.value()
@@ -195,28 +595,152 @@ class MAVLinkConfigPanel(QGroupBox):
             self.telemetry_rate.value()
         )
 
-        # ----------------------------------------------------
-        # UDP
-        # ----------------------------------------------------
-
-        connection_string = (
-            f"udp:0.0.0.0:{port}"
+        serial_device = (
+            self.serial_device
+            .text()
+            .strip()
         )
 
+        if not serial_device:
+
+            serial_device = "COM3"
+
+        baudrate = (
+            self.baudrate.value()
+        )
+
+        mavlink_version = (
+            self.mavlink_version
+            .currentText()
+        )
+
+        target_system = (
+            self.target_system.value()
+        )
+
+        target_component = (
+            self.target_component.value()
+        )
+
+        # ====================================================
+        # CONNECTION STRING
+        # ====================================================
+
+        if connection_type == "UDP":
+
+            connection_string = (
+                f"udpout:"
+                f"{tx_host}:"
+                f"{tx_port}"
+            )
+
+        elif connection_type == "TCP":
+
+            connection_string = (
+                f"tcp:"
+                f"{tx_host}:"
+                f"{tx_port}"
+            )
+
+        elif connection_type == "SERIAL":
+
+            connection_string = (
+                f"{serial_device}:"
+                f"{baudrate}"
+            )
+
+        else:
+
+            connection_string = ""
+
         return {
-            "connection_type": "UDP",
 
-            "ip_address": ip_address,
+            # =================================================
+            # TYPE
+            # =================================================
 
-            "port": port,
+            "connection_type":
+                connection_type,
 
-            "system_id": system_id,
+            # =================================================
+            # TX
+            # =================================================
 
-            "component_id": component_id,
+            "tx_host":
+                tx_host,
 
-            "telemetry_rate": telemetry_rate,
+            "tx_port":
+                tx_port,
 
-            "connection_string": connection_string,
+            # =================================================
+            # RX
+            # =================================================
+
+            "rx_host":
+                rx_host,
+
+            "rx_port":
+                rx_port,
+
+            # =================================================
+            # LEGACY
+            # =================================================
+
+            "ip_address":
+                tx_host,
+
+            "port":
+                tx_port,
+
+            # =================================================
+            # MAVLINK IDs
+            # =================================================
+
+            "system_id":
+                system_id,
+
+            "component_id":
+                component_id,
+
+            "target_system":
+                target_system,
+
+            "target_component":
+                target_component,
+
+            # =================================================
+            # SERIAL
+            # =================================================
+
+            "serial_device":
+                serial_device,
+
+            "baudrate":
+                baudrate,
+
+            # =================================================
+            # TELEMETRY
+            # =================================================
+
+            "telemetry_rate":
+                telemetry_rate,
+
+            "telemetry_rate_hz":
+                telemetry_rate,
+
+            # =================================================
+            # MAVLINK VERSION
+            # =================================================
+
+            "mavlink_version":
+                mavlink_version,
+
+            # =================================================
+            # CONNECTION STRING
+            # =================================================
+
+            "connection_string":
+                connection_string,
         }
 
     # ========================================================
@@ -232,11 +756,27 @@ class MAVLinkConfigPanel(QGroupBox):
             enabled
         )
 
-        self.ip_address.setEnabled(
+        self.tx_host.setEnabled(
             enabled
         )
 
-        self.port.setEnabled(
+        self.tx_port.setEnabled(
+            enabled
+        )
+
+        self.rx_host.setEnabled(
+            enabled
+        )
+
+        self.rx_port.setEnabled(
+            enabled
+        )
+
+        self.serial_device.setEnabled(
+            enabled
+        )
+
+        self.baudrate.setEnabled(
             enabled
         )
 
@@ -251,3 +791,25 @@ class MAVLinkConfigPanel(QGroupBox):
         self.telemetry_rate.setEnabled(
             enabled
         )
+
+        self.mavlink_version.setEnabled(
+            enabled
+        )
+
+        self.target_system.setEnabled(
+            enabled
+        )
+
+        self.target_component.setEnabled(
+            enabled
+        )
+
+        # ----------------------------------------------------
+        # Re-apply connection type rules.
+        # ----------------------------------------------------
+
+        if enabled:
+
+            self._on_connection_type_changed(
+                self.connection_type.currentText()
+            )
