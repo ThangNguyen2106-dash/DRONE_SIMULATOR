@@ -1,6 +1,9 @@
 class FlightController:
 
-    def __init__(self, drone):
+    def __init__(
+        self,
+        drone,
+    ):
 
         self.drone = drone
 
@@ -10,7 +13,7 @@ class FlightController:
 
     def arm(self):
 
-        self.drone.arm()
+        return self.drone.arm()
 
     # ========================================================
     # DISARM
@@ -18,21 +21,18 @@ class FlightController:
 
     def disarm(self):
 
-        self.drone.disarm()
+        return self.drone.disarm()
 
     # ========================================================
     # TAKEOFF
     # ========================================================
 
-    def takeoff(self, altitude):
+    def takeoff(
+        self,
+        altitude,
+    ):
 
-        if altitude <= 0:
-
-            raise ValueError(
-                "Takeoff altitude must be greater than 0"
-            )
-
-        self.drone.takeoff(
+        return self.drone.takeoff(
             altitude
         )
 
@@ -42,7 +42,7 @@ class FlightController:
 
     def land(self):
 
-        self.drone.land()
+        return self.drone.land()
 
     # ========================================================
     # HOLD
@@ -50,15 +50,7 @@ class FlightController:
 
     def hold(self):
 
-        status = self.drone.get_status()
-
-        self.drone.set_speed(
-            0.0
-        )
-
-        self.drone.set_altitude(
-            status["alt"]
-        )
+        self.drone.stop_mission()
 
     # ========================================================
     # SET ALTITUDE
@@ -68,10 +60,6 @@ class FlightController:
         self,
         altitude,
     ):
-
-        if altitude < 0:
-
-            altitude = 0.0
 
         self.drone.set_altitude(
             altitude
@@ -86,10 +74,6 @@ class FlightController:
         speed,
     ):
 
-        if speed < 0:
-
-            speed = 0.0
-
         self.drone.set_speed(
             speed
         )
@@ -102,8 +86,6 @@ class FlightController:
         self,
         heading,
     ):
-
-        heading %= 360.0
 
         self.drone.set_heading(
             heading
@@ -128,17 +110,56 @@ class FlightController:
         )
 
     # ========================================================
+    # MISSION
+    # ========================================================
+
+    def add_waypoint(
+        self,
+        latitude,
+        longitude,
+        altitude,
+        speed=5.0,
+        hold_time=0.0,
+        name="",
+    ):
+
+        return self.drone.add_waypoint(
+            latitude=latitude,
+            longitude=longitude,
+            altitude=altitude,
+            speed=speed,
+            hold_time=hold_time,
+            name=name,
+        )
+
+    # ========================================================
+
+    def clear_mission(self):
+
+        self.drone.clear_mission()
+
+    # ========================================================
+
+    def start_mission(self):
+
+        return self.drone.start_mission()
+
+    # ========================================================
+
+    def stop_mission(self):
+
+        self.drone.stop_mission()
+
+    # ========================================================
     # EMERGENCY STOP
     # ========================================================
 
     def emergency_stop(self):
 
-        self.drone.set_speed(
-            0.0
-        )
-
-        self.drone.set_altitude(
-            self.drone.get_status()["alt"]
-        )
+        self.drone.stop_mission()
 
         self.drone.disarm()
+
+    def rtl(self):
+        
+        return self.drone.rtl() 

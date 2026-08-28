@@ -1,7 +1,7 @@
 """
 MAVLink message factory.
 
-Creates MAVLink messages from DroneState.
+Creates MAVLink telemetry values from DroneState.
 """
 
 import math
@@ -17,8 +17,8 @@ class MAVLinkMessages:
         component_id: int = 1,
     ):
 
-        self.system_id = system_id
-        self.component_id = component_id
+        self.system_id = int(system_id)
+        self.component_id = int(component_id)
 
     # ========================================================
     # HEARTBEAT
@@ -29,6 +29,9 @@ class MAVLinkMessages:
         armed: bool,
         mode: str,
     ):
+        """
+        Convert simulator state into HEARTBEAT fields.
+        """
 
         custom_mode = 0
 
@@ -37,15 +40,14 @@ class MAVLinkMessages:
         )
 
         if armed:
-
             base_mode |= (
                 mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED
             )
 
         return {
-            "base_mode": base_mode,
-            "custom_mode": custom_mode,
-            "system_status": (
+            "base_mode": int(base_mode),
+            "custom_mode": int(custom_mode),
+            "system_status": int(
                 mavutil.mavlink.MAV_STATE_ACTIVE
                 if armed
                 else mavutil.mavlink.MAV_STATE_STANDBY
@@ -56,30 +58,57 @@ class MAVLinkMessages:
     # GPS_RAW_INT
     # ========================================================
 
-    def gps_raw_int(
-        self,
-        state,
-    ):
+    @staticmethod
+    def gps_raw_int(state):
+        """
+        Convert DroneState to GPS_RAW_INT fields.
+
+        Returns:
+
+            lat             int   degE7
+            lon             int   degE7
+            alt             int   mm
+            speed           int   cm/s
+            cog             int   cdeg
+        """
 
         lat = int(
-            state.lat * 1e7
+            float(state.lat) * 1e7
         )
 
         lon = int(
-            state.lon * 1e7
+            float(state.lon) * 1e7
         )
 
         alt_mm = int(
-            state.alt * 1000
+            float(state.alt) * 1000.0
+        )
+
+        ground_speed = float(
+            getattr(
+                state,
+                "ground_speed",
+                0.0,
+            )
         )
 
         speed_cm_s = int(
-            state.ground_speed * 100
+            max(
+                0.0,
+                ground_speed,
+            ) * 100.0
+        )
+
+        yaw = float(
+            getattr(
+                state,
+                "yaw",
+                0.0,
+            )
         )
 
         cog = int(
-            (state.yaw % 360.0)
-            * 100
+            (yaw % 360.0) * 100.0
         )
 
         return (
@@ -94,63 +123,122 @@ class MAVLinkMessages:
     # GLOBAL_POSITION_INT
     # ========================================================
 
-    def global_position_int(
-        self,
-        state,
-    ):
+    @staticmethod
+    def global_position_int(state):
+        """
+        Convert DroneState to GLOBAL_POSITION_INT.
+
+        Returns:
+
+            lat
+            lon
+            alt
+            relative_alt
+            vx
+            vy
+            vz
+            hdg
+        """
+
+        # ----------------------------------------------------
+        # POSITION
+        # ----------------------------------------------------
 
         lat = int(
-            state.lat * 1e7
+            float(state.lat) * 1e7
         )
 
         lon = int(
-            state.lon * 1e7
+            float(state.lon) * 1e7
+        )
+
+        alt = float(
+            getattr(
+                state,
+                "alt",
+                0.0,
+            )
         )
 
         alt_mm = int(
-            state.alt * 1000
+            alt * 1000.0
+        )
+
+        # ----------------------------------------------------
+        # RELATIVE ALTITUDE
+        # ----------------------------------------------------
+
+        home_alt = float(
+            getattr(
+                state,
+                "home_alt",
+                0.0,
+            )
         )
 
         relative_alt_mm = int(
-            (
-                state.alt
-                - getattr(
-                    state,
-                    "home_alt",
-                    0.0,
-                )
-            )
-            * 1000
+            (alt - home_alt) * 1000.0
         )
 
+        # ----------------------------------------------------
+        # VELOCITY
+        # ----------------------------------------------------
+
+        ground_speed = float(
+            getattr(
+                state,
+                "ground_speed",
+                0.0,
+            )
+        )
+
+        yaw = float(
+            getattr(
+                state,
+                "yaw",
+                0.0,
+            )
+        )
+
+        yaw_rad = math.radians(
+            yaw
+        )
+
+        # North velocity
         vx = int(
-            math.cos(
-                math.radians(
-                    state.yaw
-                )
-            )
-            * state.ground_speed
-            * 100
+            math.cos(yaw_rad)
+            * ground_speed
+            * 100.0
         )
 
+        # East velocity
         vy = int(
-            math.sin(
-                math.radians(
-                    state.yaw
-                )
+            math.sin(yaw_rad)
+            * ground_speed
+            * 100.0
+        )
+
+        # Down velocity
+        vertical_speed = float(
+            getattr(
+                state,
+                "vertical_speed",
+                0.0,
             )
-            * state.ground_speed
-            * 100
         )
 
         vz = int(
-            -state.vertical_speed
-            * 100
+            -vertical_speed
+            * 100.0
         )
 
+        # ----------------------------------------------------
+        # HEADING
+        # ----------------------------------------------------
+
         hdg = int(
-            (state.yaw % 360.0)
-            * 100
+            (yaw % 360.0)
+            * 100.0
         )
 
         return (
@@ -170,22 +258,66 @@ class MAVLinkMessages:
 
     @staticmethod
     def attitude(state):
+        """
+        Convert DroneState to ATTITUDE fields.
+
+        MAVLink expects radians.
+        Simulator state uses degrees.
+        """
 
         roll = math.radians(
-            state.roll
+            float(
+                getattr(
+                    state,
+                    "roll",
+                    0.0,
+                )
+            )
         )
 
         pitch = math.radians(
-            state.pitch
+            float(
+                getattr(
+                    state,
+                    "pitch",
+                    0.0,
+                )
+            )
         )
 
         yaw = math.radians(
-            state.yaw
+            float(
+                getattr(
+                    state,
+                    "yaw",
+                    0.0,
+                )
+            )
         )
 
-        rollspeed = 0.0
-        pitchspeed = 0.0
-        yawspeed = 0.0
+        rollspeed = float(
+            getattr(
+                state,
+                "roll_speed",
+                0.0,
+            )
+        )
+
+        pitchspeed = float(
+            getattr(
+                state,
+                "pitch_speed",
+                0.0,
+            )
+        )
+
+        yawspeed = float(
+            getattr(
+                state,
+                "yaw_speed",
+                0.0,
+            )
+        )
 
         return (
             roll,

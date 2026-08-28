@@ -1,4 +1,5 @@
 from PySide6.QtCore import Qt
+
 from PySide6.QtWidgets import (
     QMainWindow,
     QWidget,
@@ -10,11 +11,14 @@ from PySide6.QtWidgets import (
 )
 
 from gui.simulation_worker import SimulationWorker
+from gui.drone_config_panel import DroneConfigPanel
+from gui.mavlink_config_panel import MAVLinkConfigPanel
 
 
 class MainWindow(QMainWindow):
 
     def __init__(self):
+
         super().__init__()
 
         # ====================================================
@@ -26,8 +30,8 @@ class MainWindow(QMainWindow):
         )
 
         self.setMinimumSize(
-            800,
-            500,
+            900,
+            700,
         )
 
         # ====================================================
@@ -43,7 +47,7 @@ class MainWindow(QMainWindow):
         self._setup_ui()
 
     # ========================================================
-    # UI
+    # SETUP UI
     # ========================================================
 
     def _setup_ui(self):
@@ -114,6 +118,10 @@ class MainWindow(QMainWindow):
             20,
             20,
         )
+
+        # ====================================================
+        # SIMULATOR TITLE
+        # ====================================================
 
         simulator_title = QLabel(
             "DRONE SIMULATOR"
@@ -227,6 +235,30 @@ class MainWindow(QMainWindow):
         )
 
         # ====================================================
+        # DRONE CONFIGURATION
+        # ====================================================
+
+        self.drone_config_panel = (
+            DroneConfigPanel()
+        )
+
+        main_layout.addWidget(
+            self.drone_config_panel
+        )
+
+        # ====================================================
+        # MAVLINK CONFIGURATION
+        # ====================================================
+
+        self.mavlink_config_panel = (
+            MAVLinkConfigPanel()
+        )
+
+        main_layout.addWidget(
+            self.mavlink_config_panel
+        )
+
+        # ====================================================
         # MAVLINK STATUS
         # ====================================================
 
@@ -277,34 +309,17 @@ class MainWindow(QMainWindow):
         # DRONE CONFIG
         # ====================================================
 
-        drone_config = {
-
-            "lat": 10.8231000,
-
-            "lon": 106.6297000,
-
-            "alt": 0.0,
-
-            "takeoff_altitude": 20.0,
-
-            "speed": 5.0,
-
-            "heading": 90.0,
-        }
+        drone_config = (
+            self.drone_config_panel.get_config()
+        )
 
         # ====================================================
         # MAVLINK CONFIG
         # ====================================================
 
-        mavlink_config = {
-
-            "connection_string":
-                "udpout:127.0.0.1:14550",
-
-            "system_id": 1,
-
-            "component_id": 1,
-        }
+        mavlink_config = (
+            self.mavlink_config_panel.get_config()
+        )
 
         # ====================================================
         # CREATE WORKER
@@ -315,6 +330,8 @@ class MainWindow(QMainWindow):
             drone_config=drone_config,
 
             mavlink_config=mavlink_config,
+
+            parent=self,
         )
 
         # ====================================================
@@ -333,6 +350,10 @@ class MainWindow(QMainWindow):
             self.on_error
         )
 
+        self.worker.finished.connect(
+            self.on_worker_finished
+        )
+
         # ====================================================
         # UPDATE UI
         # ====================================================
@@ -344,6 +365,28 @@ class MainWindow(QMainWindow):
         self.mavlink_label.setText(
             "MAVLink: CONNECTING..."
         )
+
+        self.telemetry_label.setText(
+            "ALT: -- m   |   "
+            "SPD: -- m/s   |   "
+            "BAT: -- %"
+        )
+
+        # ====================================================
+        # DISABLE CONFIG
+        # ====================================================
+
+        self.drone_config_panel.set_enabled(
+            False
+        )
+
+        self.mavlink_config_panel.set_enabled(
+            False
+        )
+
+        # ====================================================
+        # BUTTONS
+        # ====================================================
 
         self.start_button.setEnabled(
             False
@@ -369,38 +412,65 @@ class MainWindow(QMainWindow):
 
             return
 
-        # ----------------------------------------------------
-        # Tell worker to stop
-        # ----------------------------------------------------
-
         self.status_label.setText(
             "Status: STOPPING..."
+        )
+
+        self.start_button.setEnabled(
+            False
         )
 
         self.stop_button.setEnabled(
             False
         )
 
+        # ----------------------------------------------------
+        # Request worker stop
+        # ----------------------------------------------------
+
         self.worker.stop()
 
         # ----------------------------------------------------
-        # Wait for thread
+        # IMPORTANT:
+        #
+        # Do not set self.worker = None here.
+        #
+        # on_worker_finished() will do it after
+        # the thread has really stopped.
         # ----------------------------------------------------
 
-        if self.worker.isRunning():
+    # ========================================================
+    # WORKER FINISHED
+    # ========================================================
 
-            self.worker.wait(
-                2000
-            )
+    def on_worker_finished(self):
 
         # ----------------------------------------------------
-        # Release worker
+        # Keep local reference
+        # ----------------------------------------------------
+
+        worker = self.worker
+
+        # ----------------------------------------------------
+        # Clear GUI reference
         # ----------------------------------------------------
 
         self.worker = None
 
         # ----------------------------------------------------
-        # Update UI
+        # Enable configuration
+        # ----------------------------------------------------
+
+        self.drone_config_panel.set_enabled(
+            True
+        )
+
+        self.mavlink_config_panel.set_enabled(
+            True
+        )
+
+        # ----------------------------------------------------
+        # Buttons
         # ----------------------------------------------------
 
         self.start_button.setEnabled(
@@ -410,6 +480,10 @@ class MainWindow(QMainWindow):
         self.stop_button.setEnabled(
             False
         )
+
+        # ----------------------------------------------------
+        # Status
+        # ----------------------------------------------------
 
         self.status_label.setText(
             "Status: STOPPED"
@@ -424,6 +498,14 @@ class MainWindow(QMainWindow):
             "SPD: -- m/s   |   "
             "BAT: -- %"
         )
+
+        # ----------------------------------------------------
+        # Delete worker safely
+        # ----------------------------------------------------
+
+        if worker is not None:
+
+            worker.deleteLater()
 
     # ========================================================
     # STATUS CALLBACK
@@ -502,15 +584,19 @@ class MainWindow(QMainWindow):
             f"MAVLink ERROR: {message}"
         )
 
-        self.start_button.setEnabled(
-            True
+        self.telemetry_label.setText(
+            "ALT: -- m   |   "
+            "SPD: -- m/s   |   "
+            "BAT: -- %"
         )
 
-        self.stop_button.setEnabled(
-            False
-        )
+        # ----------------------------------------------------
+        # Request worker stop
+        # ----------------------------------------------------
 
-        self.worker = None
+        if self.worker is not None:
+
+            self.worker.stop()
 
     # ========================================================
     # CLOSE WINDOW
@@ -527,9 +613,7 @@ class MainWindow(QMainWindow):
 
             if self.worker.isRunning():
 
-                self.worker.wait(
-                    2000
-                )
+                self.worker.wait()
 
             self.worker = None
 

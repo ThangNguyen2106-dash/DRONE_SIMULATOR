@@ -1,38 +1,13 @@
-"""
-Navigation module for Drone Simulator.
-
-Responsibilities:
-- Calculate distance between two GPS coordinates
-- Calculate bearing between two GPS coordinates
-- Calculate destination point
-- Calculate navigation error
-- Determine whether the drone has reached a target
-- Provide simple navigation commands
-
-This module does NOT control the drone motor/physics.
-Flight dynamics will be implemented in simulation/flight_model.py.
-"""
-
 import math
 from dataclasses import dataclass
 from typing import Optional
 
 
-# ============================================================
-# Constants
-# ============================================================
-
 EARTH_RADIUS_M = 6_371_000.0
 
 
-# ============================================================
-# Data classes
-# ============================================================
-
 @dataclass
 class GPSPoint:
-    """GPS coordinate."""
-
     lat: float
     lon: float
     alt: float = 0.0
@@ -40,46 +15,74 @@ class GPSPoint:
 
 @dataclass
 class NavigationResult:
-    """Navigation calculation result."""
-
     distance_m: float
     bearing_deg: float
     altitude_error_m: float
     reached: bool
 
 
-# ============================================================
-# Navigation
-# ============================================================
-
 class Navigation:
-    """
-    Navigation system for the drone simulator.
-
-    This class is responsible only for navigation mathematics
-    and high-level navigation decisions.
-
-    It does not simulate physical movement.
-    """
 
     def __init__(
         self,
         arrival_radius_m: float = 2.0,
         altitude_tolerance_m: float = 1.0,
     ):
-        self.arrival_radius_m = float(arrival_radius_m)
-        self.altitude_tolerance_m = float(altitude_tolerance_m)
 
-        self.current_position = GPSPoint(
-            lat=0.0,
-            lon=0.0,
-            alt=0.0,
+        self.arrival_radius_m = max(
+            0.01,
+            float(arrival_radius_m),
         )
 
-        self.target_position: Optional[GPSPoint] = None
+        self.altitude_tolerance_m = max(
+            0.0,
+            float(altitude_tolerance_m),
+        )
+
+        self.current_position = GPSPoint(
+            0.0,
+            0.0,
+            0.0,
+        )
+
+        self.target_position: Optional[
+            GPSPoint
+        ] = None
 
     # ========================================================
-    # Position
+    # VALIDATE GPS
+    # ========================================================
+
+    @staticmethod
+    def _validate_latitude(
+        latitude: float,
+    ) -> float:
+
+        latitude = float(latitude)
+
+        return max(
+            -90.0,
+            min(
+                90.0,
+                latitude,
+            ),
+        )
+
+    # ========================================================
+
+    @staticmethod
+    def _normalize_longitude(
+        longitude: float,
+    ) -> float:
+
+        longitude = float(longitude)
+
+        return (
+            longitude + 180.0
+        ) % 360.0 - 180.0
+
+    # ========================================================
+    # CURRENT POSITION
     # ========================================================
 
     def set_current_position(
@@ -87,40 +90,93 @@ class Navigation:
         lat: float,
         lon: float,
         alt: float = 0.0,
-    ) -> None:
-        """
-        Update current drone position.
-        """
+    ):
 
         self.current_position = GPSPoint(
-            lat=float(lat),
-            lon=float(lon),
+            lat=self._validate_latitude(
+                lat
+            ),
+            lon=self._normalize_longitude(
+                lon
+            ),
             alt=float(alt),
         )
+
+    # ========================================================
+    # GET CURRENT POSITION
+    # ========================================================
+
+    def get_current_position(
+        self,
+    ) -> GPSPoint:
+
+        return GPSPoint(
+            lat=self.current_position.lat,
+            lon=self.current_position.lon,
+            alt=self.current_position.alt,
+        )
+
+    # ========================================================
+    # TARGET POSITION
+    # ========================================================
 
     def set_target(
         self,
         lat: float,
         lon: float,
         alt: float = 0.0,
-    ) -> None:
-        """
-        Set navigation target.
-        """
+    ):
 
         self.target_position = GPSPoint(
-            lat=float(lat),
-            lon=float(lon),
+            lat=self._validate_latitude(
+                lat
+            ),
+            lon=self._normalize_longitude(
+                lon
+            ),
             alt=float(alt),
         )
 
-    def clear_target(self) -> None:
-        """Remove current navigation target."""
+    # ========================================================
+    # GET TARGET
+    # ========================================================
+
+    def get_target(
+        self,
+    ) -> Optional[GPSPoint]:
+
+        if self.target_position is None:
+
+            return None
+
+        return GPSPoint(
+            lat=self.target_position.lat,
+            lon=self.target_position.lon,
+            alt=self.target_position.alt,
+        )
+
+    # ========================================================
+    # CLEAR TARGET
+    # ========================================================
+
+    def clear_target(self):
 
         self.target_position = None
 
     # ========================================================
-    # GPS calculations
+    # HAS TARGET
+    # ========================================================
+
+    def has_target(self) -> bool:
+
+        return (
+            self.target_position is not None
+        )
+
+    # ========================================================
+    # DISTANCE
+    #
+    # Haversine distance on Earth's surface.
     # ========================================================
 
     @staticmethod
@@ -130,34 +186,115 @@ class Navigation:
         lat2: float,
         lon2: float,
     ) -> float:
-        """
-        Calculate great-circle distance between two GPS points.
 
-        Returns:
-            Distance in meters.
-        """
+        lat1 = float(lat1)
+        lon1 = float(lon1)
+        lat2 = float(lat2)
+        lon2 = float(lon2)
 
-        lat1_rad = math.radians(lat1)
-        lat2_rad = math.radians(lat2)
-
-        delta_lat = math.radians(lat2 - lat1)
-        delta_lon = math.radians(lon2 - lon1)
-
-        a = (
-            math.sin(delta_lat / 2.0) ** 2
-            + math.cos(lat1_rad)
-            * math.cos(lat2_rad)
-            * math.sin(delta_lon / 2.0) ** 2
+        lat1_rad = math.radians(
+            lat1
         )
 
-        a = max(0.0, min(1.0, a))
+        lat2_rad = math.radians(
+            lat2
+        )
+
+        delta_lat = math.radians(
+            lat2 - lat1
+        )
+
+        # Normalize longitude difference.
+        delta_lon_deg = (
+            lon2 - lon1
+        )
+
+        delta_lon_deg = (
+            delta_lon_deg + 180.0
+        ) % 360.0 - 180.0
+
+        delta_lon = math.radians(
+            delta_lon_deg
+        )
+
+        a = (
+            math.sin(
+                delta_lat / 2.0
+            ) ** 2
+            +
+            math.cos(lat1_rad)
+            *
+            math.cos(lat2_rad)
+            *
+            math.sin(
+                delta_lon / 2.0
+            ) ** 2
+        )
+
+        # Floating point protection.
+        a = max(
+            0.0,
+            min(
+                1.0,
+                a,
+            ),
+        )
 
         c = 2.0 * math.atan2(
             math.sqrt(a),
-            math.sqrt(1.0 - a),
+            math.sqrt(
+                1.0 - a
+            ),
         )
 
-        return EARTH_RADIUS_M * c
+        return (
+            EARTH_RADIUS_M * c
+        )
+
+    # ========================================================
+    # 3D DISTANCE
+    #
+    # Surface distance + altitude difference.
+    # ========================================================
+
+    @staticmethod
+    def distance_3d_m(
+        lat1: float,
+        lon1: float,
+        alt1: float,
+        lat2: float,
+        lon2: float,
+        alt2: float,
+    ) -> float:
+
+        horizontal = (
+            Navigation.distance_m(
+                lat1,
+                lon1,
+                lat2,
+                lon2,
+            )
+        )
+
+        vertical = (
+            float(alt2)
+            - float(alt1)
+        )
+
+        return math.sqrt(
+            horizontal ** 2
+            +
+            vertical ** 2
+        )
+
+    # ========================================================
+    # BEARING
+    #
+    # 0   = North
+    # 90  = East
+    # 180 = South
+    # 270 = West
+    # ========================================================
 
     @staticmethod
     def bearing_deg(
@@ -166,23 +303,27 @@ class Navigation:
         lat2: float,
         lon2: float,
     ) -> float:
-        """
-        Calculate initial bearing from point 1 to point 2.
 
-        Returns:
-            Bearing in degrees [0, 360).
+        lat1_rad = math.radians(
+            float(lat1)
+        )
 
-        Convention:
-            0   = North
-            90  = East
-            180 = South
-            270 = West
-        """
+        lat2_rad = math.radians(
+            float(lat2)
+        )
 
-        lat1_rad = math.radians(lat1)
-        lat2_rad = math.radians(lat2)
+        delta_lon_deg = (
+            float(lon2)
+            - float(lon1)
+        )
 
-        delta_lon = math.radians(lon2 - lon1)
+        delta_lon_deg = (
+            delta_lon_deg + 180.0
+        ) % 360.0 - 180.0
+
+        delta_lon = math.radians(
+            delta_lon_deg
+        )
 
         x = (
             math.sin(delta_lon)
@@ -192,19 +333,34 @@ class Navigation:
         y = (
             math.cos(lat1_rad)
             * math.sin(lat2_rad)
-            - math.sin(lat1_rad)
+            -
+            math.sin(lat1_rad)
             * math.cos(lat2_rad)
             * math.cos(delta_lon)
         )
 
+        # Same coordinates -> no meaningful bearing.
+        if (
+            abs(x) < 1e-12
+            and
+            abs(y) < 1e-12
+        ):
+
+            return 0.0
+
         bearing = math.degrees(
-            math.atan2(x, y)
+            math.atan2(
+                x,
+                y,
+            )
         )
 
-        return (bearing + 360.0) % 360.0
+        return (
+            bearing + 360.0
+        ) % 360.0
 
     # ========================================================
-    # Altitude
+    # ALTITUDE ERROR
     # ========================================================
 
     @staticmethod
@@ -212,59 +368,92 @@ class Navigation:
         current_alt: float,
         target_alt: float,
     ) -> float:
-        """
-        Calculate altitude error.
 
-        Positive:
-            Drone needs to climb.
-
-        Negative:
-            Drone needs to descend.
-        """
-
-        return float(target_alt) - float(current_alt)
+        return (
+            float(target_alt)
+            - float(current_alt)
+        )
 
     # ========================================================
-    # Navigation status
+    # NAVIGATION RESULT
     # ========================================================
 
-    def get_navigation_result(self) -> Optional[NavigationResult]:
-        """
-        Calculate current navigation status.
-
-        Returns:
-            NavigationResult or None if no target exists.
-        """
+    def get_navigation_result(
+        self,
+    ) -> Optional[NavigationResult]:
 
         if self.target_position is None:
+
             return None
 
-        current = self.current_position
-        target = self.target_position
-
-        distance = self.distance_m(
-            current.lat,
-            current.lon,
-            target.lat,
-            target.lon,
+        current = (
+            self.current_position
         )
 
-        bearing = self.bearing_deg(
-            current.lat,
-            current.lon,
-            target.lat,
-            target.lon,
+        target = (
+            self.target_position
         )
 
-        altitude_error = self.altitude_error(
-            current.alt,
-            target.alt,
+        # ----------------------------------------------------
+        # Horizontal distance
+        # ----------------------------------------------------
+
+        distance = (
+            self.distance_m(
+                current.lat,
+                current.lon,
+                target.lat,
+                target.lon,
+            )
+        )
+
+        # ----------------------------------------------------
+        # Bearing
+        # ----------------------------------------------------
+
+        bearing = (
+            self.bearing_deg(
+                current.lat,
+                current.lon,
+                target.lat,
+                target.lon,
+            )
+        )
+
+        # ----------------------------------------------------
+        # Altitude error
+        # ----------------------------------------------------
+
+        altitude_error = (
+            self.altitude_error(
+                current.alt,
+                target.alt,
+            )
+        )
+
+        # ----------------------------------------------------
+        # Reached condition
+        #
+        # BOTH horizontal and altitude requirements
+        # must be satisfied.
+        # ----------------------------------------------------
+
+        horizontal_reached = (
+            distance
+            <= self.arrival_radius_m
+        )
+
+        altitude_reached = (
+            abs(
+                altitude_error
+            )
+            <= self.altitude_tolerance_m
         )
 
         reached = (
-            distance <= self.arrival_radius_m
-            and abs(altitude_error)
-            <= self.altitude_tolerance_m
+            horizontal_reached
+            and
+            altitude_reached
         )
 
         return NavigationResult(
@@ -275,149 +464,117 @@ class Navigation:
         )
 
     # ========================================================
-    # Target status
+    # TARGET STATUS
     # ========================================================
 
-    def has_target(self) -> bool:
-        """Return True when a target exists."""
+    def is_target_reached(
+        self,
+    ) -> bool:
 
-        return self.target_position is not None
-
-    def is_target_reached(self) -> bool:
-        """Return True when the drone has reached its target."""
-
-        result = self.get_navigation_result()
+        result = (
+            self.get_navigation_result()
+        )
 
         if result is None:
+
             return False
 
         return result.reached
 
     # ========================================================
-    # Direction
+    # ALIAS
     # ========================================================
 
-    def get_distance_to_target(self) -> Optional[float]:
-        """Return distance to target in meters."""
+    def target_reached(
+        self,
+    ) -> bool:
 
-        result = self.get_navigation_result()
+        return self.is_target_reached()
+
+    # ========================================================
+    # DISTANCE TO TARGET
+    # ========================================================
+
+    def get_distance_to_target(
+        self,
+    ) -> Optional[float]:
+
+        result = (
+            self.get_navigation_result()
+        )
 
         if result is None:
+
             return None
 
         return result.distance_m
 
-    def get_bearing_to_target(self) -> Optional[float]:
-        """Return bearing to target in degrees."""
+    # ========================================================
+    # BEARING TO TARGET
+    # ========================================================
 
-        result = self.get_navigation_result()
+    def get_bearing_to_target(
+        self,
+    ) -> Optional[float]:
+
+        result = (
+            self.get_navigation_result()
+        )
 
         if result is None:
+
             return None
 
         return result.bearing_deg
 
-    def get_altitude_error(self) -> Optional[float]:
-        """Return altitude error in meters."""
+    # ========================================================
+    # ALTITUDE ERROR
+    # ========================================================
 
-        result = self.get_navigation_result()
+    def get_altitude_error(
+        self,
+    ) -> Optional[float]:
+
+        result = (
+            self.get_navigation_result()
+        )
 
         if result is None:
+
             return None
 
         return result.altitude_error_m
 
     # ========================================================
-    # Utility
+    # HEADING ERROR
     # ========================================================
 
     @staticmethod
-    def normalize_angle(angle_deg: float) -> float:
-        """
-        Normalize angle to [-180, 180).
+    def normalize_angle(
+        angle_deg: float,
+    ) -> float:
 
-        Example:
+        return (
+            float(angle_deg)
+            + 180.0
+        ) % 360.0 - 180.0
 
-            350 -> -10
-            10  -> 10
-            180 -> -180
-        """
-
-        return (angle_deg + 180.0) % 360.0 - 180.0
+    # ========================================================
 
     @staticmethod
     def heading_error(
         current_heading_deg: float,
         target_bearing_deg: float,
     ) -> float:
-        """
-        Calculate shortest heading error.
-
-        Positive:
-            Turn right / clockwise.
-
-        Negative:
-            Turn left / counter-clockwise.
-        """
 
         error = (
-            target_bearing_deg
-            - current_heading_deg
+            float(target_bearing_deg)
+            -
+            float(current_heading_deg)
         )
 
-        return Navigation.normalize_angle(error)
-
-    def get_heading_error(
-        self,
-        current_heading_deg: float,
-    ) -> Optional[float]:
-        """
-        Calculate heading error from current drone heading
-        to target.
-        """
-
-        bearing = self.get_bearing_to_target()
-
-        if bearing is None:
-            return None
-
-        return self.heading_error(
-            current_heading_deg,
-            bearing,
+        return (
+            Navigation.normalize_angle(
+                error
+            )
         )
-
-
-# ============================================================
-# Simple helper functions
-# ============================================================
-
-def calculate_distance(
-    lat1: float,
-    lon1: float,
-    lat2: float,
-    lon2: float,
-) -> float:
-    """Standalone distance calculation."""
-
-    return Navigation.distance_m(
-        lat1,
-        lon1,
-        lat2,
-        lon2,
-    )
-
-
-def calculate_bearing(
-    lat1: float,
-    lon1: float,
-    lat2: float,
-    lon2: float,
-) -> float:
-    """Standalone bearing calculation."""
-
-    return Navigation.bearing_deg(
-        lat1,
-        lon1,
-        lat2,
-        lon2,
-    )
