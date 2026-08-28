@@ -22,6 +22,10 @@ class Waypoint:
     hold_time: float = 0.0
 
     name: str = ""
+    command: int = 16
+    acceptance_radius: float = 0.0
+    yaw: float = 0.0
+    source_seq: int = -1
 
     # "waypoint", "takeoff", "land" or "rtl"
     action: str = "waypoint"
@@ -62,6 +66,9 @@ class Mission:
         hold_time: float = 0.0,
         name: str = "",
         action: str = "waypoint",
+        command: int = 16,
+        acceptance_radius: float = 0.0,
+        yaw: float = 0.0,
     ) -> Waypoint:
 
         waypoint = Waypoint(
@@ -79,6 +86,10 @@ class Mission:
             ),
             name=str(name),
             action=str(action),
+            command=int(command),
+            acceptance_radius=max(0.0, float(acceptance_radius)),
+            yaw=float(yaw) % 360.0,
+            source_seq=len(self.waypoints),
         )
 
         self.waypoints.append(

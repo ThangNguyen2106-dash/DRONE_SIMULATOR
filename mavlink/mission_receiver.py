@@ -1,9 +1,50 @@
-from typing import Optional
+"""
+MAVLink mission receiver.
+
+Handles MAVLink mission upload/download between
+Ground Control Station and the simulated drone.
+
+Supported:
+
+    UPLOAD
+        MISSION_COUNT
+        MISSION_ITEM_INT
+        MISSION_ITEM
+
+    DOWNLOAD
+        MISSION_REQUEST_LIST
+        MISSION_REQUEST_INT
+        MISSION_REQUEST
+
+    CONTROL
+        MISSION_CLEAR_ALL
+        MISSION_SET_CURRENT
+
+The important implementation detail in this project is:
+
+    MAVLink message
+          |
+          | *_encode()
+          v
+    MAVLink message object
+          |
+          | connection.send()
+          v
+    UDP socket
+
+Do NOT call pymavlink *_send() functions directly because
+the project's MAVLink object is created as MAVLink(None).
+"""
+
 
 from pymavlink import mavutil
 
 from simulator.mission import Mission
 
+
+# ============================================================
+# MISSION RECEIVER
+# ============================================================
 
 class MissionReceiver:
 
@@ -20,9 +61,13 @@ class MissionReceiver:
 
         self.mission = mission
 
-        self.system_id = system_id
+        self.system_id = int(
+            system_id
+        )
 
-        self.component_id = component_id
+        self.component_id = int(
+            component_id
+        )
 
         # Callable returning {"lat", "lon", "alt"} for the
         # drone's home position, used to resolve
@@ -41,11 +86,11 @@ class MissionReceiver:
 
         self.received_count = 0
 
+        # Mission-level speed command (MAV_CMD_DO_CHANGE_SPEED).
+        self.pending_speed = 5.0
+
         # ====================================================
         # STAGING MISSION
-        #
-        # The current mission is not replaced until the
-        # complete upload has been received.
         # ====================================================
 
         self.staging_mission = Mission()
@@ -130,7 +175,7 @@ class MissionReceiver:
             return True
 
         # ====================================================
-        # DOWNLOAD REQUEST
+        # DOWNLOAD
         # ====================================================
 
         if message_type == "MISSION_REQUEST_LIST":
@@ -201,6 +246,109 @@ class MissionReceiver:
             pass
 
     # ========================================================
+    # TARGET
+    # ========================================================
+
+    def _target_system(
+        self,
+    ) -> int:
+
+        if self.sender_system is None:
+
+            return 0
+
+        return int(
+            self.sender_system
+        )
+
+    # ========================================================
+
+    def _target_component(
+        self,
+    ) -> int:
+
+        if self.sender_component is None:
+
+            return 0
+
+        return int(
+            self.sender_component
+        )
+
+    # ========================================================
+    # GET MAVLINK ENCODER
+    # ========================================================
+
+    def _get_mavlink(
+        self,
+    ):
+
+        if self.connection is None:
+
+            return None
+
+        return getattr(
+            self.connection,
+            "mavlink",
+            None,
+        )
+
+    # ========================================================
+    # SEND ENCODED MESSAGE
+    # ========================================================
+
+    def _send_message(
+        self,
+        message,
+        description="",
+    ) -> bool:
+        """
+        Send an already encoded MAVLink message
+        through the project's MAVLinkConnection.
+        """
+
+        if message is None:
+
+            return False
+
+        if self.connection is None:
+
+            return False
+
+        try:
+
+            result = self.connection.send(
+                message
+            )
+
+        except Exception as exc:
+
+            print(
+                "[MISSION TX ERROR] "
+                f"{description}: "
+                f"{type(exc).__name__}: "
+                f"{exc}"
+            )
+
+            return False
+
+        if not result:
+
+            print(
+                "[MISSION TX FAILED] "
+                f"{description}"
+            )
+
+            return False
+
+        print(
+            "[MISSION TX] "
+            f"{description}"
+        )
+
+        return True
+
+    # ========================================================
     # MISSION COUNT
     # ========================================================
 
@@ -228,13 +376,13 @@ class MissionReceiver:
             return
 
         print(
-            f"[MISSION RX] "
+            "[MISSION RX] "
             f"MISSION_COUNT={count}"
         )
 
-        # ----------------------------------------------------
-        # Empty mission
-        # ----------------------------------------------------
+        # ====================================================
+        # EMPTY MISSION
+        # ====================================================
 
         if count <= 0:
 
@@ -260,9 +408,9 @@ class MissionReceiver:
 
             return
 
-        # ----------------------------------------------------
-        # Protect against unreasonable mission sizes.
-        # ----------------------------------------------------
+        # ====================================================
+        # SAFETY LIMIT
+        # ====================================================
 
         if count > 1000:
 
@@ -277,9 +425,9 @@ class MissionReceiver:
 
             return
 
-        # ----------------------------------------------------
-        # Start staging upload.
-        # ----------------------------------------------------
+        # ====================================================
+        # START STAGING
+        # ====================================================
 
         self.staging_mission.clear()
 
@@ -291,17 +439,17 @@ class MissionReceiver:
 
         self.received_count = 0
 
-        # ----------------------------------------------------
-        # New upload supersedes download.
-        # ----------------------------------------------------
+        self.pending_speed = 5.0
+
+        # New upload invalidates any download.
 
         self.download_active = False
 
         self.download_index = 0
 
-        # ----------------------------------------------------
-        # Request first item.
-        # ----------------------------------------------------
+        # ====================================================
+        # REQUEST FIRST ITEM
+        # ====================================================
 
         self._request_item(
             0
@@ -337,11 +485,16 @@ class MissionReceiver:
 
         except Exception:
 
+            print(
+                "[MISSION RX] "
+                "Invalid MISSION_ITEM_INT seq"
+            )
+
             return
 
-        # ----------------------------------------------------
-        # Sequence validation.
-        # ----------------------------------------------------
+        # ====================================================
+        # SEQUENCE
+        # ====================================================
 
         if seq != self.expected_seq:
 
@@ -357,9 +510,9 @@ class MissionReceiver:
 
             return
 
-        # ----------------------------------------------------
-        # Store mission item.
-        # ----------------------------------------------------
+        # ====================================================
+        # STORE
+        # ====================================================
 
         accepted = (
             self._store_mission_item_int(
@@ -383,9 +536,9 @@ class MissionReceiver:
 
         self.expected_seq += 1
 
-        # ----------------------------------------------------
-        # Upload finished.
-        # ----------------------------------------------------
+        # ====================================================
+        # COMPLETE
+        # ====================================================
 
         if (
             self.received_count
@@ -396,9 +549,9 @@ class MissionReceiver:
 
             return
 
-        # ----------------------------------------------------
-        # Request next item.
-        # ----------------------------------------------------
+        # ====================================================
+        # REQUEST NEXT
+        # ====================================================
 
         self._request_item(
             self.expected_seq
@@ -415,6 +568,11 @@ class MissionReceiver:
 
         if not self.upload_active:
 
+            print(
+                "[MISSION RX] "
+                "Unexpected MISSION_ITEM"
+            )
+
             return
 
         self._remember_sender(
@@ -429,7 +587,16 @@ class MissionReceiver:
 
         except Exception:
 
+            print(
+                "[MISSION RX] "
+                "Invalid MISSION_ITEM seq"
+            )
+
             return
+
+        # ====================================================
+        # SEQUENCE
+        # ====================================================
 
         if seq != self.expected_seq:
 
@@ -438,6 +605,10 @@ class MissionReceiver:
             )
 
             return
+
+        # ====================================================
+        # STORE
+        # ====================================================
 
         accepted = (
             self._store_mission_item_legacy(
@@ -461,6 +632,10 @@ class MissionReceiver:
 
         self.expected_seq += 1
 
+        # ====================================================
+        # COMPLETE
+        # ====================================================
+
         if (
             self.received_count
             >= self.expected_count
@@ -469,6 +644,10 @@ class MissionReceiver:
             self._finish_upload()
 
             return
+
+        # ====================================================
+        # NEXT
+        # ====================================================
 
         self._request_item(
             self.expected_seq
@@ -497,18 +676,28 @@ class MissionReceiver:
 
             return False
 
-        # ----------------------------------------------------
-        # Supported navigation commands.
-        # ----------------------------------------------------
+        # ====================================================
+        # MISSION COMMANDS
+        # ====================================================
+
+        change_speed_command = getattr(
+            mavutil.mavlink, "MAV_CMD_DO_CHANGE_SPEED", 178
+        )
+
+        if command == change_speed_command:
+            try:
+                # param2 = speed in m/s for MAV_CMD_DO_CHANGE_SPEED.
+                self.pending_speed = max(0.0, float(message.param2))
+            except Exception:
+                return False
+            print(f"[MISSION RX] DO_CHANGE_SPEED -> {self.pending_speed:.2f} m/s")
+            return True
 
         supported_commands = {
-
             mavutil.mavlink.MAV_CMD_NAV_WAYPOINT,
-
             mavutil.mavlink.MAV_CMD_NAV_TAKEOFF,
-
             mavutil.mavlink.MAV_CMD_NAV_LAND,
-
+            getattr(mavutil.mavlink, "MAV_CMD_NAV_LOITER_TIME", 19),
             mavutil.mavlink.MAV_CMD_NAV_RETURN_TO_LAUNCH,
         }
 
@@ -521,17 +710,19 @@ class MissionReceiver:
 
             return False
 
-        # ----------------------------------------------------
-        # MAV_CMD_NAV_RETURN_TO_LAUNCH:
+        # ====================================================
+        # RETURN TO LAUNCH
         #
         # GCS usually sends x=y=z=0 for this item. The real
         # target is the drone's home position.
-        # ----------------------------------------------------
+        # ====================================================
 
-        if (
+        is_rtl = (
             command
             == mavutil.mavlink.MAV_CMD_NAV_RETURN_TO_LAUNCH
-        ):
+        )
+
+        if is_rtl:
 
             home = self._resolve_home()
 
@@ -547,9 +738,9 @@ class MissionReceiver:
 
         else:
 
-            # ------------------------------------------------
-            # GPS coordinates.
-            # ------------------------------------------------
+            # ================================================
+            # GPS
+            # ================================================
 
             try:
 
@@ -573,9 +764,9 @@ class MissionReceiver:
 
                 return False
 
-            # ------------------------------------------------
-            # Coordinate validation.
-            # ------------------------------------------------
+            # ================================================
+            # COORDINATE VALIDATION
+            # ================================================
 
             if not (
                 -90.0
@@ -593,15 +784,9 @@ class MissionReceiver:
 
                 return False
 
-        # ----------------------------------------------------
-        # MAV_CMD_NAV_WAYPOINT:
-        #
-        # param2 = acceptance radius
-        # param3 = pass through
-        # param4 = yaw
-        #
-        # param1 is hold time.
-        # ----------------------------------------------------
+        # ====================================================
+        # HOLD TIME
+        # ====================================================
 
         hold_time = 0.0
 
@@ -618,16 +803,56 @@ class MissionReceiver:
 
             pass
 
-        # ----------------------------------------------------
-        # Default simulator speed.
-        # ----------------------------------------------------
+        # ====================================================
+        # ACCEPTANCE RADIUS
+        # ====================================================
 
-        speed = 5.0
+        acceptance_radius = None
 
-        is_rtl = (
-            command
-            == mavutil.mavlink.MAV_CMD_NAV_RETURN_TO_LAUNCH
-        )
+        try:
+
+            acceptance_radius = max(
+                0.0,
+                float(
+                    message.param2
+                ),
+            )
+
+        except Exception:
+
+            pass
+
+        # ====================================================
+        # YAW
+        # ====================================================
+
+        yaw = None
+
+        try:
+
+            yaw = float(
+                message.param4
+            )
+
+        except Exception:
+
+            pass
+
+        # ====================================================
+        # SPEED
+        # ====================================================
+
+        # Mission protocol itself does not contain a simple
+        # per-WP speed field in MISSION_ITEM_INT.
+        #
+        # The simulator therefore uses 5 m/s as the default.
+        #
+
+        speed = max(0.0, float(self.pending_speed))
+
+        # ====================================================
+        # ADD WAYPOINT
+        # ====================================================
 
         waypoint = (
             self.staging_mission
@@ -647,8 +872,40 @@ class MissionReceiver:
                     if is_rtl
                     else "waypoint"
                 ),
+                command=command,
+                acceptance_radius=acceptance_radius or 0.0,
+                yaw=yaw or 0.0,
             )
         )
+
+        # Preserve the original MAVLink sequence.
+        waypoint.source_seq = sequence
+
+        # Store extra values when the waypoint object supports
+        # them. This keeps compatibility with the existing
+        # Mission implementation.
+
+        if acceptance_radius is not None:
+
+            try:
+
+                waypoint.acceptance_radius = (
+                    acceptance_radius
+                )
+
+            except Exception:
+
+                pass
+
+        if yaw is not None:
+
+            try:
+
+                waypoint.yaw = yaw
+
+            except Exception:
+
+                pass
 
         print(
             "[MISSION RX] "
@@ -696,14 +953,27 @@ class MissionReceiver:
 
             return False
 
+        # ====================================================
+        # COMMAND
+        # ====================================================
+
+        change_speed_command = getattr(
+            mavutil.mavlink, "MAV_CMD_DO_CHANGE_SPEED", 178
+        )
+
+        if command == change_speed_command:
+            try:
+                self.pending_speed = max(0.0, float(message.param2))
+            except Exception:
+                return False
+            print(f"[MISSION RX] DO_CHANGE_SPEED -> {self.pending_speed:.2f} m/s")
+            return True
+
         supported_commands = {
-
             mavutil.mavlink.MAV_CMD_NAV_WAYPOINT,
-
             mavutil.mavlink.MAV_CMD_NAV_TAKEOFF,
-
             mavutil.mavlink.MAV_CMD_NAV_LAND,
-
+            getattr(mavutil.mavlink, "MAV_CMD_NAV_LOITER_TIME", 19),
             mavutil.mavlink.MAV_CMD_NAV_RETURN_TO_LAUNCH,
         }
 
@@ -737,6 +1007,10 @@ class MissionReceiver:
 
         else:
 
+            # ================================================
+            # VALIDATION
+            # ================================================
+
             if not (
                 -90.0
                 <= latitude
@@ -753,6 +1027,10 @@ class MissionReceiver:
 
                 return False
 
+        # ====================================================
+        # HOLD
+        # ====================================================
+
         hold_time = 0.0
 
         try:
@@ -768,13 +1046,17 @@ class MissionReceiver:
 
             pass
 
+        # ====================================================
+        # WAYPOINT
+        # ====================================================
+
         waypoint = (
             self.staging_mission
             .add_waypoint(
                 latitude=latitude,
                 longitude=longitude,
                 altitude=altitude,
-                speed=5.0,
+                speed=max(0.0, float(self.pending_speed)),
                 hold_time=hold_time,
                 name=(
                     "RTL"
@@ -786,15 +1068,21 @@ class MissionReceiver:
                     if is_rtl
                     else "waypoint"
                 ),
+                command=command,
+                acceptance_radius=max(0.0, float(getattr(message, "param2", 0.0))),
+                yaw=float(getattr(message, "param4", 0.0)),
             )
         )
+
+        waypoint.source_seq = sequence
 
         print(
             "[MISSION RX] "
             f"{waypoint.name}: "
             f"LAT={latitude:.7f} "
             f"LON={longitude:.7f} "
-            f"ALT={altitude:.2f}"
+            f"ALT={altitude:.2f} "
+            f"HOLD={hold_time:.1f}s"
         )
 
         return True
@@ -805,7 +1093,7 @@ class MissionReceiver:
 
     def _resolve_home(
         self,
-    ) -> Optional[dict]:
+    ):
 
         if self.get_home_position is None:
 
@@ -848,15 +1136,19 @@ class MissionReceiver:
                 6,
             )
 
-        altitude = float(
-            message.z
-        )
+        try:
 
-        # ----------------------------------------------------
-        # Relative altitude.
-        #
-        # Simulator Home altitude is normally 0m.
-        # ----------------------------------------------------
+            altitude = float(
+                message.z
+            )
+
+        except Exception:
+
+            return 0.0
+
+        # ====================================================
+        # RELATIVE ALTITUDE
+        # ====================================================
 
         relative_frames = {
 
@@ -873,9 +1165,9 @@ class MissionReceiver:
             ),
         }
 
-        # ----------------------------------------------------
-        # Absolute altitude.
-        # ----------------------------------------------------
+        # ====================================================
+        # ABSOLUTE ALTITUDE
+        # ====================================================
 
         absolute_frames = {
 
@@ -894,11 +1186,6 @@ class MissionReceiver:
 
         if frame in relative_frames:
 
-            # Home altitude in this simulator is represented
-            # by the local altitude reference.
-            #
-            # Therefore a relative altitude of 50m becomes
-            # 50m in simulator coordinates.
             return altitude
 
         if frame in absolute_frames:
@@ -920,53 +1207,117 @@ class MissionReceiver:
     def _request_item(
         self,
         sequence: int,
-    ):
+    ) -> bool:
+        """
+        Ask GCS for one mission item.
 
-        mav = self._get_mav()
+        IMPORTANT:
+        Uses mission_request_int_encode() followed by
+        self.connection.send().
+        """
+
+        mav = self._get_mavlink()
 
         if mav is None:
 
-            return
+            print(
+                "[MISSION TX ERROR] "
+                "MAVLink encoder unavailable"
+            )
+
+            return False
+
+        sequence = int(
+            sequence
+        )
 
         target_system = (
-            self.sender_system
-            if self.sender_system is not None
-            else 0
+            self._target_system()
         )
 
         target_component = (
-            self.sender_component
-            if self.sender_component is not None
-            else 0
+            self._target_component()
         )
 
-        if not self._encode_and_send(
-            mav,
-            "mission_request_int_encode",
+        mission_type = getattr(
+            mavutil.mavlink,
+            "MAV_MISSION_TYPE_MISSION",
+            0,
+        )
+
+        # ====================================================
+        # ENCODE
+        # ====================================================
+
+        try:
+
+            encoder = getattr(
+                mav,
+                "mission_request_int_encode",
+                None,
+            )
+
+            if encoder is None:
+
+                print(
+                    "[MISSION TX ERROR] "
+                    "mission_request_int_encode "
+                    "unavailable"
+                )
+
+                return False
+
+            try:
+
+                message = encoder(
+                    target_system,
+                    target_component,
+                    sequence,
+                    mission_type,
+                )
+
+            except TypeError:
+
+                message = encoder(
+                    target_system,
+                    target_component,
+                    sequence,
+                )
+
+        except Exception as exc:
+
+            print(
+                "[MISSION TX ERROR] "
+                "MISSION_REQUEST_INT encode: "
+                f"{type(exc).__name__}: "
+                f"{exc}"
+            )
+
+            return False
+
+        # ====================================================
+        # SEND
+        # ====================================================
+
+        return self._send_message(
+            message,
             (
-                target_system,
-                target_component,
-                int(sequence),
+                "MISSION_REQUEST_INT "
+                f"seq={sequence}"
             ),
-        ):
-
-            return
-
-        print(
-            "[MISSION TX] "
-            f"MISSION_REQUEST_INT seq={sequence}"
         )
 
     # ========================================================
     # FINISH UPLOAD
     # ========================================================
 
-    def _finish_upload(self):
+    def _finish_upload(
+        self,
+    ):
 
-        # ----------------------------------------------------
-        # Replace active mission only after all items
-        # have been successfully received.
-        # ----------------------------------------------------
+        # ====================================================
+        # REPLACE ACTIVE MISSION
+        # ====================================================
 
         self.mission.clear()
 
@@ -974,15 +1325,58 @@ class MissionReceiver:
             self.staging_mission.get_all()
         ):
 
-            self.mission.add_waypoint(
-                latitude=waypoint.latitude,
-                longitude=waypoint.longitude,
-                altitude=waypoint.altitude,
-                speed=waypoint.speed,
-                hold_time=waypoint.hold_time,
-                name=waypoint.name,
-                action=waypoint.action,
+            new_waypoint = (
+                self.mission.add_waypoint(
+                    latitude=(
+                        waypoint.latitude
+                    ),
+                    longitude=(
+                        waypoint.longitude
+                    ),
+                    altitude=(
+                        waypoint.altitude
+                    ),
+                    speed=(
+                        waypoint.speed
+                    ),
+                    hold_time=(
+                        waypoint.hold_time
+                    ),
+                    name=(
+                        waypoint.name
+                    ),
+                )
             )
+
+            # Preserve optional attributes.
+
+            for attribute in (
+                "acceptance_radius",
+                "yaw",
+                "command",
+                "source_seq",
+                "action",
+            ):
+
+                if hasattr(
+                    waypoint,
+                    attribute,
+                ):
+
+                    try:
+
+                        setattr(
+                            new_waypoint,
+                            attribute,
+                            getattr(
+                                waypoint,
+                                attribute,
+                            ),
+                        )
+
+                    except Exception:
+
+                        pass
 
         self.upload_active = False
 
@@ -998,6 +1392,10 @@ class MissionReceiver:
             self.mission.count()
         )
 
+        self.download_active = False
+
+        self.download_index = 0
+
         print(
             "[MISSION] Upload complete"
         )
@@ -1007,6 +1405,10 @@ class MissionReceiver:
             f"{self.mission.count()} "
             "waypoints accepted"
         )
+
+        # ====================================================
+        # ACK
+        # ====================================================
 
         self._send_mission_ack(
             mavutil.mavlink.MAV_MISSION_ACCEPTED
@@ -1042,8 +1444,7 @@ class MissionReceiver:
         self.mission.clear()
 
         print(
-            "[MISSION] "
-            "Mission cleared by GCS"
+            "[MISSION] Mission cleared by GCS"
         )
 
         self._send_mission_ack(
@@ -1051,7 +1452,7 @@ class MissionReceiver:
         )
 
     # ========================================================
-    # MISSION REQUEST LIST
+    # REQUEST LIST
     # ========================================================
 
     def _handle_request_list(
@@ -1067,7 +1468,7 @@ class MissionReceiver:
 
         print(
             "[MISSION RX] "
-            f"MISSION_REQUEST_LIST "
+            "MISSION_REQUEST_LIST "
             f"count={count}"
         )
 
@@ -1080,7 +1481,7 @@ class MissionReceiver:
         )
 
     # ========================================================
-    # MISSION REQUEST INT
+    # REQUEST INT
     # ========================================================
 
     def _handle_request_int(
@@ -1107,7 +1508,7 @@ class MissionReceiver:
         )
 
     # ========================================================
-    # LEGACY MISSION REQUEST
+    # REQUEST LEGACY
     # ========================================================
 
     def _handle_request(
@@ -1140,41 +1541,75 @@ class MissionReceiver:
     def _send_mission_count(
         self,
         count: int,
-    ):
+    ) -> bool:
 
-        mav = self._get_mav()
+        mav = self._get_mavlink()
 
         if mav is None:
 
-            return
+            return False
 
         target_system = (
-            self.sender_system
-            if self.sender_system is not None
-            else 0
+            self._target_system()
         )
 
         target_component = (
-            self.sender_component
-            if self.sender_component is not None
-            else 0
+            self._target_component()
         )
 
-        if not self._encode_and_send(
-            mav,
-            "mission_count_encode",
-            (
-                target_system,
-                target_component,
-                int(count),
-            ),
-        ):
+        count = int(
+            count
+        )
 
-            return
+        mission_type = getattr(
+            mavutil.mavlink,
+            "MAV_MISSION_TYPE_MISSION",
+            0,
+        )
 
-        print(
-            "[MISSION TX] "
-            f"MISSION_COUNT={count}"
+        try:
+
+            encoder = getattr(
+                mav,
+                "mission_count_encode",
+                None,
+            )
+
+            if encoder is None:
+
+                return False
+
+            try:
+
+                message = encoder(
+                    target_system,
+                    target_component,
+                    count,
+                    mission_type,
+                )
+
+            except TypeError:
+
+                message = encoder(
+                    target_system,
+                    target_component,
+                    count,
+                )
+
+        except Exception as exc:
+
+            print(
+                "[MISSION TX ERROR] "
+                "MISSION_COUNT encode: "
+                f"{type(exc).__name__}: "
+                f"{exc}"
+            )
+
+            return False
+
+        return self._send_message(
+            message,
+            f"MISSION_COUNT={count}",
         )
 
     # ========================================================
@@ -1184,13 +1619,17 @@ class MissionReceiver:
     def _send_mission_item_int(
         self,
         sequence: int,
-    ):
+    ) -> bool:
 
-        mav = self._get_mav()
+        mav = self._get_mavlink()
 
         if mav is None:
 
-            return
+            return False
+
+        sequence = int(
+            sequence
+        )
 
         waypoint = (
             self.mission.get_waypoint(
@@ -1200,76 +1639,192 @@ class MissionReceiver:
 
         if waypoint is None:
 
-            return
+            print(
+                "[MISSION TX] "
+                f"Waypoint seq={sequence} "
+                "does not exist"
+            )
+
+            return False
 
         target_system = (
-            self.sender_system
-            if self.sender_system is not None
-            else 0
+            self._target_system()
         )
 
         target_component = (
-            self.sender_component
-            if self.sender_component is not None
-            else 0
+            self._target_component()
         )
 
-        if not self._encode_and_send(
-            mav,
-            "mission_item_int_encode",
-            (
-                target_system,
-                target_component,
-                int(sequence),
-                mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT,
-                (
-                    mavutil.mavlink.MAV_CMD_NAV_RETURN_TO_LAUNCH
-                    if waypoint.action == "rtl"
-                    else mavutil.mavlink.MAV_CMD_NAV_WAYPOINT
-                ),
-                0,
-                1,
-                float(waypoint.hold_time),
-                0.0,
-                0.0,
-                0.0,
-                int(
-                    round(
-                        waypoint.latitude
-                        * 10_000_000.0
-                    )
-                ),
-                int(
-                    round(
-                        waypoint.longitude
-                        * 10_000_000.0
-                    )
-                ),
-                float(waypoint.altitude),
-            ),
-        ):
+        frame = getattr(
+            mavutil.mavlink,
+            "MAV_FRAME_GLOBAL_RELATIVE_ALT_INT",
+            6,
+        )
 
-            return
+        command = int(
+            getattr(
+                waypoint,
+                "command",
+                None,
+            )
+            or getattr(
+                mavutil.mavlink,
+                "MAV_CMD_NAV_WAYPOINT",
+                16,
+            )
+        )
 
-        print(
-            "[MISSION TX] "
-            f"MISSION_ITEM_INT seq={sequence}"
+        mission_type = getattr(
+            mavutil.mavlink,
+            "MAV_MISSION_TYPE_MISSION",
+            0,
+        )
+
+        # ====================================================
+        # PARAMETERS
+        # ====================================================
+
+        hold_time = float(
+            getattr(
+                waypoint,
+                "hold_time",
+                0.0,
+            )
+        )
+
+        acceptance_radius = float(
+            getattr(
+                waypoint,
+                "acceptance_radius",
+                0.0,
+            )
+        )
+
+        yaw = float(
+            getattr(
+                waypoint,
+                "yaw",
+                0.0,
+            )
+        )
+
+        current = 1 if sequence == 0 else 0
+
+        autocontinue = 1
+
+        latitude_int = int(
+            round(
+                waypoint.latitude
+                * 10_000_000.0
+            )
+        )
+
+        longitude_int = int(
+            round(
+                waypoint.longitude
+                * 10_000_000.0
+            )
+        )
+
+        altitude = float(
+            waypoint.altitude
+        )
+
+        # ====================================================
+        # ENCODE
+        # ====================================================
+
+        try:
+
+            encoder = getattr(
+                mav,
+                "mission_item_int_encode",
+                None,
+            )
+
+            if encoder is None:
+
+                print(
+                    "[MISSION TX ERROR] "
+                    "mission_item_int_encode "
+                    "unavailable"
+                )
+
+                return False
+
+            try:
+
+                message = encoder(
+                    target_system,
+                    target_component,
+                    sequence,
+                    frame,
+                    command,
+                    current,
+                    autocontinue,
+                    hold_time,
+                    acceptance_radius,
+                    0.0,
+                    yaw,
+                    latitude_int,
+                    longitude_int,
+                    altitude,
+                    mission_type,
+                )
+
+            except TypeError:
+
+                message = encoder(
+                    target_system,
+                    target_component,
+                    sequence,
+                    frame,
+                    command,
+                    current,
+                    autocontinue,
+                    hold_time,
+                    acceptance_radius,
+                    0.0,
+                    yaw,
+                    latitude_int,
+                    longitude_int,
+                    altitude,
+                )
+
+        except Exception as exc:
+
+            print(
+                "[MISSION TX ERROR] "
+                "MISSION_ITEM_INT encode: "
+                f"{type(exc).__name__}: "
+                f"{exc}"
+            )
+
+            return False
+
+        return self._send_message(
+            message,
+            f"MISSION_ITEM_INT seq={sequence}",
         )
 
     # ========================================================
-    # SEND LEGACY ITEM
+    # SEND LEGACY MISSION ITEM
     # ========================================================
 
     def _send_mission_item(
         self,
         sequence: int,
-    ):
+    ) -> bool:
 
-        mav = self._get_mav()
+        mav = self._get_mavlink()
 
         if mav is None:
 
-            return
+            return False
+
+        sequence = int(
+            sequence
+        )
 
         waypoint = (
             self.mission.get_waypoint(
@@ -1279,55 +1834,118 @@ class MissionReceiver:
 
         if waypoint is None:
 
-            return
+            return False
 
         target_system = (
-            self.sender_system
-            if self.sender_system is not None
-            else 0
+            self._target_system()
         )
 
         target_component = (
-            self.sender_component
-            if self.sender_component is not None
-            else 0
+            self._target_component()
         )
 
-        if not self._encode_and_send(
-            mav,
-            "mission_item_encode",
-            (
+        frame = getattr(
+            mavutil.mavlink,
+            "MAV_FRAME_GLOBAL_RELATIVE_ALT",
+            3,
+        )
+
+        command = int(
+            getattr(
+                waypoint,
+                "command",
+                None,
+            )
+            or getattr(
+                mavutil.mavlink,
+                "MAV_CMD_NAV_WAYPOINT",
+                16,
+            )
+        )
+
+        hold_time = float(
+            getattr(
+                waypoint,
+                "hold_time",
+                0.0,
+            )
+        )
+
+        acceptance_radius = float(
+            getattr(
+                waypoint,
+                "acceptance_radius",
+                0.0,
+            )
+        )
+
+        yaw = float(
+            getattr(
+                waypoint,
+                "yaw",
+                0.0,
+            )
+        )
+
+        current = 1 if sequence == 0 else 0
+
+        autocontinue = 1
+
+        try:
+
+            encoder = getattr(
+                mav,
+                "mission_item_encode",
+                None,
+            )
+
+            if encoder is None:
+
+                return False
+
+            message = encoder(
                 target_system,
                 target_component,
-                int(sequence),
-                mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT,
-                (
-                    mavutil.mavlink.MAV_CMD_NAV_RETURN_TO_LAUNCH
-                    if waypoint.action == "rtl"
-                    else mavutil.mavlink.MAV_CMD_NAV_WAYPOINT
+                sequence,
+                frame,
+                command,
+                current,
+                autocontinue,
+                hold_time,
+                acceptance_radius,
+                0.0,
+                yaw,
+                float(
+                    waypoint.latitude
                 ),
-                0,
-                1,
-                float(waypoint.hold_time),
-                0.0,
-                0.0,
-                0.0,
-                float(waypoint.latitude),
-                float(waypoint.longitude),
-                float(waypoint.altitude),
-            ),
-        ):
+                float(
+                    waypoint.longitude
+                ),
+                float(
+                    waypoint.altitude
+                ),
+            )
 
-            return
+        except Exception as exc:
 
-        print(
-            "[MISSION TX] "
-            f"MISSION_ITEM seq={sequence}"
+            print(
+                "[MISSION TX ERROR] "
+                "MISSION_ITEM encode: "
+                f"{type(exc).__name__}: "
+                f"{exc}"
+            )
+
+            return False
+
+        return self._send_message(
+            message,
+            f"MISSION_ITEM seq={sequence}",
         )
 
     # ========================================================
     # SET CURRENT
     # ========================================================
+
     def _handle_set_current(
         self,
         message,
@@ -1349,7 +1967,7 @@ class MissionReceiver:
 
         waypoint = (
             self.mission.get_waypoint(
-            sequence + 1
+                sequence + 1
             )
         )
 
@@ -1363,13 +1981,16 @@ class MissionReceiver:
             return
 
         # ----------------------------------------------------
-        # Mission internal index is zero-based.
-        # MAVLink sequence is also zero-based.
+        # Zero-based internal index.
         # ----------------------------------------------------
 
         self.mission.current_index = (
             sequence
         )
+
+        self.mission.started = True
+
+        self.mission.finished = False
 
         print(
             "[MISSION] "
@@ -1384,138 +2005,79 @@ class MissionReceiver:
     def _send_mission_ack(
         self,
         result,
-    ):
+    ) -> bool:
 
-        mav = self._get_mav()
+        mav = self._get_mavlink()
 
         if mav is None:
 
-            return
+            return False
 
         target_system = (
-            self.sender_system
-            if self.sender_system is not None
-            else 0
+            self._target_system()
         )
 
         target_component = (
-            self.sender_component
-            if self.sender_component is not None
-            else 0
+            self._target_component()
         )
 
-        if not self._encode_and_send(
-            mav,
-            "mission_ack_encode",
-            (
-                target_system,
-                target_component,
-                result,
-            ),
-            error_label="MISSION ACK ERROR",
-        ):
-
-            return
-
-        print(
-            "[MISSION TX] "
-            f"MISSION_ACK={result}"
-        )
-
-    # ========================================================
-    # ENCODE + SEND
-    #
-    # mav.<name>_send(...) writes to MAVLink.file, which is
-    # None for this UDP-socket-based connection - it always
-    # raises AttributeError. Build the message with
-    # <name>_encode(...) instead and push the raw bytes out
-    # through MAVLinkConnection.send(), matching the pattern
-    # used by mavlink/telemetry.py.
-    # ========================================================
-
-    def _encode_and_send(
-        self,
-        mav,
-        encode_name: str,
-        args: tuple,
-        error_label: str = "MISSION TX ERROR",
-    ) -> bool:
-
-        encode = getattr(
-            mav,
-            encode_name,
+        mission_type = getattr(
+            mavutil.mavlink,
+            "MAV_MISSION_TYPE_MISSION",
+            0,
         )
 
         try:
 
-            message = encode(
-                *args
+            encoder = getattr(
+                mav,
+                "mission_ack_encode",
+                None,
             )
 
-        except TypeError:
+            if encoder is None:
+
+                return False
 
             try:
 
-                message = encode(
-                    *args,
-                    mavutil.mavlink.MAV_MISSION_TYPE_MISSION,
+                message = encoder(
+                    target_system,
+                    target_component,
+                    int(result),
+                    mission_type,
                 )
 
-            except Exception as exc:
+            except TypeError:
 
-                print(
-                    f"[{error_label}] "
-                    f"{type(exc).__name__}: {exc}"
+                message = encoder(
+                    target_system,
+                    target_component,
+                    int(result),
                 )
-
-                return False
 
         except Exception as exc:
 
             print(
-                f"[{error_label}] "
-                f"{type(exc).__name__}: {exc}"
+                "[MISSION ACK ERROR] "
+                f"{type(exc).__name__}: "
+                f"{exc}"
             )
 
             return False
 
-        return bool(
-            self.connection.send(
-                message
-            )
-        )
-
-    # ========================================================
-    # MAV OBJECT
-    # ========================================================
-
-    def _get_mav(self):
-
-        if self.connection is None:
-
-            return None
-
-        mav_connection = getattr(
-            self.connection,
-            "connection",
-            None,
-        )
-
-        if mav_connection is None:
-
-            return None
-
-        return getattr(
-            mav_connection,
-            "mav",
-            None,
+        return self._send_message(
+            message,
+            f"MISSION_ACK={result}",
         )
 
     # ========================================================
     # STATUS
     # ========================================================
 
-    def get_status(self):
+    def get_status(
+        self,
+    ):
 
         return {
 
@@ -1539,4 +2101,10 @@ class MissionReceiver:
 
             "download_index":
                 self.download_index,
+
+            "sender_system":
+                self.sender_system,
+
+            "sender_component":
+                self.sender_component,
         }
