@@ -1,0 +1,90 @@
+RIGEL TECH DRONE SIMULATOR
+PROPRIETARY SOFTWARE LICENSE AGREEMENT
+
+Copyright (c) 2026 Rigel Tech. All rights reserved.
+
+Product: Rigel Tech Drone Simulator (MAVLink Test Drone Simulator)
+
+------------------------------------------------------------------------------
+
+1. OWNERSHIP
+
+This software, including its source code, documentation, assets, and all
+associated files (the "Software"), is the proprietary and confidential
+property of Rigel Tech ("Licensor"). The Software is protected by copyright
+law and international treaty provisions. All rights not expressly granted
+in this Agreement are reserved by the Licensor.
+
+2. GRANT OF LICENSE
+
+Subject to the terms of this Agreement, the Licensor grants authorized
+users a limited, non-exclusive, non-transferable, revocable license to
+install and use the Software solely for internal engineering, testing,
+training, and evaluation purposes related to MAVLink-based drone/UAV
+systems developed by or for Rigel Tech.
+
+3. RESTRICTIONS
+
+Unless expressly authorized in writing by the Licensor, no person or
+entity may:
+
+    a. Copy, reproduce, or distribute the Software or any portion of it,
+       in whole or in part, to any third party;
+
+    b. Modify, adapt, translate, reverse engineer, decompile, or
+       disassemble the Software;
+
+    c. Sublicense, sell, lease, rent, or otherwise transfer rights to the
+       Software;
+
+    d. Remove, alter, or obscure any copyright, trademark, or proprietary
+       notices contained in the Software;
+
+    e. Use the Software, in whole or in part, to develop a competing
+       product or service;
+
+    f. Deploy the Software in any production, commercial, or
+       safety-critical flight system without prior written approval from
+       the Licensor.
+
+4. CONFIDENTIALITY
+
+The Software and its underlying source code constitute confidential trade
+secrets of the Licensor. Users agree to maintain the confidentiality of
+the Software and not disclose it to any unauthorized party.
+
+5. NO WARRANTY
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT. THE SOFTWARE IS A
+SIMULATION TOOL INTENDED FOR TESTING AND DEVELOPMENT PURPOSES ONLY AND MUST
+NOT BE RELIED UPON AS THE SOLE VALIDATION METHOD FOR ANY REAL-WORLD FLIGHT
+HARDWARE OR SAFETY-CRITICAL SYSTEM.
+
+6. LIMITATION OF LIABILITY
+
+IN NO EVENT SHALL THE LICENSOR BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT, OR OTHERWISE, ARISING
+FROM, OUT OF, OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE, INCLUDING BUT NOT LIMITED TO ANY DAMAGE ARISING
+FROM THE USE OF SIMULATION RESULTS TO OPERATE PHYSICAL DRONE HARDWARE.
+
+7. TERMINATION
+
+This license is effective until terminated. The Licensor may terminate
+this license at any time if the user fails to comply with any term of
+this Agreement. Upon termination, the user must cease all use of the
+Software and destroy all copies in their possession.
+
+8. GOVERNING LAW
+
+This Agreement shall be governed by and construed in accordance with the
+laws of Vietnam, without regard to its conflict of law provisions.
+
+------------------------------------------------------------------------------
+
+For licensing inquiries, permissions, or authorized redistribution
+requests, please contact Rigel Tech directly.
+
+RIGEL TECH — All Rights Reserved.
