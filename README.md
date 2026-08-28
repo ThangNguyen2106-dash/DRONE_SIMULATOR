@@ -33,17 +33,23 @@ mavlink/
   messages.py                  Định nghĩa/tiện ích cho các MAVLink message
 
 gui/
-  main_window.py              Cửa sổ chính: nút START/STOP, hiển thị trạng thái & telemetry
+  main_window.py              Cửa sổ chính: START/STOP, panel DRONE/MAVLINK CONFIGURATION, khối
+                               LIVE SIMULATION CONTROL (mode, slider, ARM/DISARM/TAKEOFF/LAND/RTL,
+                               GPS override) và LIVE TELEMETRY, chạy điều khiển trực tiếp qua
+                               SimulationWorker.queue_command()
   drone_config_panel.py       Cấu hình vị trí ban đầu, độ cao takeoff, tốc độ, hướng bay
   mavlink_config_panel.py     Cấu hình kết nối MAVLink (IP, port, system/component ID, tần suất telemetry)
-  manual_control_panel.py     Điều khiển bay thủ công: ARM/DISARM/TAKEOFF/LAND/RTL
-  failure_panel.py            Giả lập lỗi (GPS/Compass/RC/EKF) và gió, áp dụng ngay khi đang chạy
-  simulation_worker.py        QThread chạy vòng lặp mô phỏng, tách khỏi luồng GUI
+  manual_control_panel.py     (chưa dùng) Widget ARM/DISARM/TAKEOFF/LAND/RTL độc lập, không được
+                               main_window.py import — chức năng tương đương đã có sẵn trực tiếp
+                               trong LIVE SIMULATION CONTROL
+  failure_panel.py            (chưa dùng) Widget giả lập lỗi GPS/Compass/RC/EKF + gió, không được
+                               main_window.py import — hiện chưa có đường bật từ giao diện
+  simulation_worker.py        QThread chạy vòng lặp mô phỏng + hàng đợi lệnh runtime, tách khỏi
+                               luồng GUI
 
 config/
-  simulator.json               File cấu hình mặc định (system/component ID, cổng, tần suất, vị trí home)
-
-test_udp.py                    Script debug: lắng nghe UDP RX để kiểm tra dữ liệu gửi tới simulator
+  simulator.json               File cấu hình tham khảo (system/component ID, cổng, tần suất, vị trí
+                                home); không được GUI đọc trực tiếp khi khởi động
 ```
 
 ## Tính năng chính
@@ -55,10 +61,14 @@ test_udp.py                    Script debug: lắng nghe UDP RX để kiểm tra
   set tốc độ, hướng bay (heading), vị trí (lat/lon/alt), attitude (roll/pitch/yaw), mức pin.
 - **Mission**: nhận danh sách waypoint từ GCS (upload mission chuẩn MAVLink), tự động bay bám theo
   waypoint, tính khoảng cách/hướng còn lại, phát hiện hoàn thành mission.
-- **Giả lập lỗi (fault injection)**: bật/tắt lỗi GPS, Compass, RC link, EKF và gió (tốc độ + hướng)
-  ngay trong lúc mô phỏng đang chạy, để kiểm tra khả năng phản ứng của GCS.
-- **Giao diện đồ họa**: cấu hình drone/MAVLink trước khi chạy, theo dõi trạng thái & telemetry
-  (độ cao, tốc độ, pin) theo thời gian thực, điều khiển thủ công không cần GCS.
+- **Giao diện đồ họa**: cấu hình drone/MAVLink trước khi chạy; khi đang chạy có khối **LIVE
+  SIMULATION CONTROL** để điều khiển trực tiếp (mode, altitude/speed/heading, lat/lon, roll/pitch/
+  yaw, battery, GPS fix/satellites/HDOP/VDOP, ARM/DISARM/TAKEOFF/LAND/RTL) mà không cần GCS, cùng
+  khối **LIVE TELEMETRY** theo dõi trạng thái theo thời gian thực.
+
+> **Ghi chú:** repo có sẵn `gui/failure_panel.py` (giả lập lỗi GPS/Compass/RC/EKF + gió) và
+> `gui/manual_control_panel.py`, nhưng **chưa được `gui/main_window.py` sử dụng** — xem
+> `HUONG_DAN_SU_DUNG.md` mục 6 để biết chi tiết.
 
 ## Cài đặt
 
@@ -83,11 +93,13 @@ python main.py
 3. Ở panel **MAVLINK CONFIGURATION**: chỉnh IP/port, System ID, Component ID, tần suất gửi telemetry
    (mặc định UDP).
 4. Bấm **START** để khởi động mô phỏng (simulator sẽ mở UDP TX/RX và bắt đầu gửi heartbeat/telemetry).
-5. Kết nối QGroundControl / RIGEL GCS tới cổng UDP tương ứng, hoặc dùng panel **MANUAL FLIGHT CONTROL**
-   để điều khiển trực tiếp (ARM/DISARM/TAKEOFF/LAND/RTL) mà không cần GCS.
-6. Dùng panel **FAILURE SIMULATION & WIND** để bật lỗi hoặc chỉnh gió trong lúc bay, quan sát phản ứng
-   trên GCS.
+5. Kết nối QGroundControl / RIGEL GCS tới cổng UDP tương ứng, hoặc dùng khối **LIVE SIMULATION
+   CONTROL** để điều khiển trực tiếp (mode, altitude/speed/heading, lat/lon, roll/pitch/yaw,
+   battery, GPS, ARM/DISARM/TAKEOFF/LAND/RTL) mà không cần GCS.
+6. Theo dõi khối **LIVE TELEMETRY** để xem trạng thái bay cập nhật theo thời gian thực.
 7. Bấm **STOP** để dừng mô phỏng và đóng kết nối.
+
+Chi tiết từng điều khiển, xem `HUONG_DAN_SU_DUNG.md`.
 
 ## Cổng mặc định (config/simulator.json)
 
@@ -100,11 +112,8 @@ python main.py
 
 Tạo một UDP Link lắng nghe ở cổng `14550`. Simulator sẽ gửi telemetry tới `127.0.0.1:14550`.
 
-## Debug UDP
+## Tài liệu chi tiết
 
-`test_udp.py` là script độc lập để lắng nghe cổng UDP RX (`14551`) và in ra dữ liệu nhận được,
-hữu ích khi cần kiểm tra xem GCS có thực sự gửi lệnh tới simulator hay không.
-
-```powershell
-python test_udp.py
-```
+- `HUONG_DAN_SU_DUNG.md` — hướng dẫn từng bước sử dụng giao diện.
+- `GIAO_THUC_MAVLINK.md` — chi tiết giao thức MAVLink (transport, framing, telemetry, lệnh điều
+  khiển, mission protocol).
