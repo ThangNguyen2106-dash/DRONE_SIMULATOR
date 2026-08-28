@@ -40,6 +40,7 @@ the project's MAVLink object is created as MAVLink(None).
 from pymavlink import mavutil
 
 from simulator.mission import Mission
+from .mav_logger import mav_log, MISSION, TX, RX
 
 
 # ============================================================
@@ -323,28 +324,17 @@ class MissionReceiver:
 
         except Exception as exc:
 
-            print(
-                "[MISSION TX ERROR] "
-                f"{description}: "
-                f"{type(exc).__name__}: "
-                f"{exc}"
-            )
+            mav_log.error(TX, f"{description}: {type(exc).__name__}: {exc}")
 
             return False
 
         if not result:
 
-            print(
-                "[MISSION TX FAILED] "
-                f"{description}"
-            )
+            mav_log.warn(TX, f"send failed: {description}")
 
             return False
 
-        print(
-            "[MISSION TX] "
-            f"{description}"
-        )
+        mav_log.debug(TX, description)
 
         return True
 
@@ -375,10 +365,7 @@ class MissionReceiver:
 
             return
 
-        print(
-            "[MISSION RX] "
-            f"MISSION_COUNT={count}"
-        )
+        mav_log.info(RX, f"MISSION_COUNT={count}")
 
         # ====================================================
         # EMPTY MISSION
@@ -402,9 +389,7 @@ class MissionReceiver:
                 mavutil.mavlink.MAV_MISSION_ACCEPTED
             )
 
-            print(
-                "[MISSION] Empty mission accepted"
-            )
+            mav_log.info(MISSION, "Empty mission accepted")
 
             return
 
@@ -418,10 +403,7 @@ class MissionReceiver:
                 mavutil.mavlink.MAV_MISSION_ERROR
             )
 
-            print(
-                "[MISSION] Mission rejected: "
-                f"too many items ({count})"
-            )
+            mav_log.warn(MISSION, f"Mission rejected: too many items ({count})")
 
             return
 
@@ -466,10 +448,7 @@ class MissionReceiver:
 
         if not self.upload_active:
 
-            print(
-                "[MISSION RX] "
-                "Unexpected MISSION_ITEM_INT"
-            )
+            mav_log.warn(RX, "Unexpected MISSION_ITEM_INT")
 
             return
 
@@ -485,10 +464,7 @@ class MissionReceiver:
 
         except Exception:
 
-            print(
-                "[MISSION RX] "
-                "Invalid MISSION_ITEM_INT seq"
-            )
+            mav_log.warn(RX, "Invalid MISSION_ITEM_INT seq")
 
             return
 
@@ -498,11 +474,7 @@ class MissionReceiver:
 
         if seq != self.expected_seq:
 
-            print(
-                "[MISSION RX] "
-                f"Unexpected seq={seq}, "
-                f"expected={self.expected_seq}"
-            )
+            mav_log.warn(RX, f"Unexpected seq={seq}, expected={self.expected_seq}")
 
             self._request_item(
                 self.expected_seq
@@ -568,10 +540,7 @@ class MissionReceiver:
 
         if not self.upload_active:
 
-            print(
-                "[MISSION RX] "
-                "Unexpected MISSION_ITEM"
-            )
+            mav_log.warn(RX, "Unexpected MISSION_ITEM")
 
             return
 
@@ -587,10 +556,7 @@ class MissionReceiver:
 
         except Exception:
 
-            print(
-                "[MISSION RX] "
-                "Invalid MISSION_ITEM seq"
-            )
+            mav_log.warn(RX, "Invalid MISSION_ITEM seq")
 
             return
 
@@ -690,7 +656,7 @@ class MissionReceiver:
                 self.pending_speed = max(0.0, float(message.param2))
             except Exception:
                 return False
-            print(f"[MISSION RX] DO_CHANGE_SPEED -> {self.pending_speed:.2f} m/s")
+            mav_log.info(RX, f"DO_CHANGE_SPEED -> {self.pending_speed:.2f} m/s")
             return True
 
         supported_commands = {
@@ -703,10 +669,7 @@ class MissionReceiver:
 
         if command not in supported_commands:
 
-            print(
-                "[MISSION RX] "
-                f"Unsupported command={command}"
-            )
+            mav_log.warn(RX, f"Unsupported command={command}")
 
             return False
 
@@ -907,13 +870,10 @@ class MissionReceiver:
 
                 pass
 
-        print(
-            "[MISSION RX] "
-            f"{waypoint.name}: "
-            f"LAT={latitude:.7f} "
-            f"LON={longitude:.7f} "
-            f"ALT={altitude:.2f} "
-            f"HOLD={hold_time:.1f}s"
+        mav_log.info(
+            RX,
+            f"{waypoint.name}: LAT={latitude:.7f} LON={longitude:.7f} "
+            f"ALT={altitude:.2f} HOLD={hold_time:.1f}s",
         )
 
         return True
@@ -966,7 +926,7 @@ class MissionReceiver:
                 self.pending_speed = max(0.0, float(message.param2))
             except Exception:
                 return False
-            print(f"[MISSION RX] DO_CHANGE_SPEED -> {self.pending_speed:.2f} m/s")
+            mav_log.info(RX, f"DO_CHANGE_SPEED -> {self.pending_speed:.2f} m/s")
             return True
 
         supported_commands = {
@@ -979,10 +939,7 @@ class MissionReceiver:
 
         if command not in supported_commands:
 
-            print(
-                "[MISSION RX] "
-                f"Unsupported command={command}"
-            )
+            mav_log.warn(RX, f"Unsupported command={command}")
 
             return False
 
@@ -1076,13 +1033,10 @@ class MissionReceiver:
 
         waypoint.source_seq = sequence
 
-        print(
-            "[MISSION RX] "
-            f"{waypoint.name}: "
-            f"LAT={latitude:.7f} "
-            f"LON={longitude:.7f} "
-            f"ALT={altitude:.2f} "
-            f"HOLD={hold_time:.1f}s"
+        mav_log.info(
+            RX,
+            f"{waypoint.name}: LAT={latitude:.7f} LON={longitude:.7f} "
+            f"ALT={altitude:.2f} HOLD={hold_time:.1f}s",
         )
 
         return True
@@ -1192,11 +1146,7 @@ class MissionReceiver:
 
             return altitude
 
-        print(
-            "[MISSION RX] "
-            f"Unknown frame={frame}; "
-            f"using z={altitude}"
-        )
+        mav_log.warn(RX, f"Unknown frame={frame}; using z={altitude}")
 
         return altitude
 
@@ -1220,10 +1170,7 @@ class MissionReceiver:
 
         if mav is None:
 
-            print(
-                "[MISSION TX ERROR] "
-                "MAVLink encoder unavailable"
-            )
+            mav_log.error(TX, "MAVLink encoder unavailable")
 
             return False
 
@@ -1259,11 +1206,7 @@ class MissionReceiver:
 
             if encoder is None:
 
-                print(
-                    "[MISSION TX ERROR] "
-                    "mission_request_int_encode "
-                    "unavailable"
-                )
+                mav_log.error(TX, "mission_request_int_encode unavailable")
 
                 return False
 
@@ -1286,12 +1229,7 @@ class MissionReceiver:
 
         except Exception as exc:
 
-            print(
-                "[MISSION TX ERROR] "
-                "MISSION_REQUEST_INT encode: "
-                f"{type(exc).__name__}: "
-                f"{exc}"
-            )
+            mav_log.error(TX, f"MISSION_REQUEST_INT encode: {type(exc).__name__}: {exc}")
 
             return False
 
@@ -1396,15 +1334,7 @@ class MissionReceiver:
 
         self.download_index = 0
 
-        print(
-            "[MISSION] Upload complete"
-        )
-
-        print(
-            "[MISSION] "
-            f"{self.mission.count()} "
-            "waypoints accepted"
-        )
+        mav_log.info(MISSION, f"Upload complete: {self.mission.count()} waypoints accepted")
 
         # ====================================================
         # ACK
@@ -1443,9 +1373,7 @@ class MissionReceiver:
 
         self.mission.clear()
 
-        print(
-            "[MISSION] Mission cleared by GCS"
-        )
+        mav_log.info(MISSION, "Mission cleared by GCS")
 
         self._send_mission_ack(
             mavutil.mavlink.MAV_MISSION_ACCEPTED
@@ -1466,11 +1394,7 @@ class MissionReceiver:
 
         count = self.mission.count()
 
-        print(
-            "[MISSION RX] "
-            "MISSION_REQUEST_LIST "
-            f"count={count}"
-        )
+        mav_log.info(RX, f"MISSION_REQUEST_LIST count={count}")
 
         self.download_active = True
 
@@ -1598,12 +1522,7 @@ class MissionReceiver:
 
         except Exception as exc:
 
-            print(
-                "[MISSION TX ERROR] "
-                "MISSION_COUNT encode: "
-                f"{type(exc).__name__}: "
-                f"{exc}"
-            )
+            mav_log.error(TX, f"MISSION_COUNT encode: {type(exc).__name__}: {exc}")
 
             return False
 
@@ -1639,11 +1558,7 @@ class MissionReceiver:
 
         if waypoint is None:
 
-            print(
-                "[MISSION TX] "
-                f"Waypoint seq={sequence} "
-                "does not exist"
-            )
+            mav_log.warn(TX, f"Waypoint seq={sequence} does not exist")
 
             return False
 
@@ -1744,11 +1659,7 @@ class MissionReceiver:
 
             if encoder is None:
 
-                print(
-                    "[MISSION TX ERROR] "
-                    "mission_item_int_encode "
-                    "unavailable"
-                )
+                mav_log.error(TX, "mission_item_int_encode unavailable")
 
                 return False
 
@@ -1793,12 +1704,7 @@ class MissionReceiver:
 
         except Exception as exc:
 
-            print(
-                "[MISSION TX ERROR] "
-                "MISSION_ITEM_INT encode: "
-                f"{type(exc).__name__}: "
-                f"{exc}"
-            )
+            mav_log.error(TX, f"MISSION_ITEM_INT encode: {type(exc).__name__}: {exc}")
 
             return False
 
@@ -1928,12 +1834,7 @@ class MissionReceiver:
 
         except Exception as exc:
 
-            print(
-                "[MISSION TX ERROR] "
-                "MISSION_ITEM encode: "
-                f"{type(exc).__name__}: "
-                f"{exc}"
-            )
+            mav_log.error(TX, f"MISSION_ITEM encode: {type(exc).__name__}: {exc}")
 
             return False
 
@@ -1973,10 +1874,7 @@ class MissionReceiver:
 
         if waypoint is None:
 
-            print(
-                "[MISSION] "
-                f"Invalid waypoint sequence={sequence}"
-            )
+            mav_log.warn(MISSION, f"Invalid waypoint sequence={sequence}")
 
             return
 
@@ -1992,11 +1890,7 @@ class MissionReceiver:
 
         self.mission.finished = False
 
-        print(
-            "[MISSION] "
-            f"Current waypoint -> "
-            f"WP{sequence + 1}"
-        )
+        mav_log.info(MISSION, f"Current waypoint -> WP{sequence + 1}")
 
     # ========================================================
     # ACK
@@ -2058,11 +1952,7 @@ class MissionReceiver:
 
         except Exception as exc:
 
-            print(
-                "[MISSION ACK ERROR] "
-                f"{type(exc).__name__}: "
-                f"{exc}"
-            )
+            mav_log.error(MISSION, f"ACK encode: {type(exc).__name__}: {exc}")
 
             return False
 

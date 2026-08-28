@@ -6,6 +6,7 @@ from pymavlink import mavutil
 
 from .connection import MAVLinkConnection
 from .messages import MAVLinkMessages
+from .mav_logger import mav_log, TX, MISSION
 
 
 class MAVLinkTelemetry:
@@ -72,6 +73,13 @@ class MAVLinkTelemetry:
         # ====================================================
 
         self.tx_enabled = True
+
+        # When True, every successfully sent message prints
+        # its actual field values (lat/lon/alt, roll/pitch/yaw,
+        # battery, ...) instead of just being counted. Off by
+        # default since it is high-volume; toggle at runtime
+        # with set_debug_verbose().
+        self.debug_verbose = False
 
         self.tx_total = 0
 
@@ -192,16 +200,18 @@ class MAVLinkTelemetry:
         self,
         message_name: str,
         result: bool,
+        details: str = "",
     ) -> bool:
 
         if not result:
 
-            print(
-                f"[TELEMETRY TX FAILED] "
-                f"{message_name}"
-            )
+            mav_log.warn(TX, f"send failed: {message_name}")
 
             return False
+
+        if self.debug_verbose and details:
+
+            mav_log.debug(TX, f"{message_name:<20} {details}")
 
         self.tx_total += 1
 
@@ -248,82 +258,43 @@ class MAVLinkTelemetry:
         return True
 
     # ========================================================
+    # DEBUG VERBOSE
+    # ========================================================
+
+    def set_debug_verbose(
+        self,
+        enabled: bool,
+    ) -> None:
+
+        self.debug_verbose = bool(enabled)
+
+        mav_log.info(
+            TX,
+            f"Verbose TX debug: {'ON' if self.debug_verbose else 'OFF'}",
+        )
+
+    # ========================================================
     # TX STATUS
+    #
+    # One line, DEBUG level, so it stays silent unless a teammate
+    # explicitly turns on DEBUG (mav_log.set_level("DEBUG")) to
+    # watch per-message TX counters. Previously this printed an
+    # unconditional multi-line block every second.
     # ========================================================
 
     def print_tx_status(self) -> None:
 
-        print()
-        print("======================================")
-        print("       MAVLINK TELEMETRY TX")
-        print("======================================")
-
-        print(
-            f"[TX] Enabled                : "
-            f"{self.tx_enabled}"
+        mav_log.debug(
+            TX,
+            f"sysid={self.system_id} compid={self.component_id} "
+            f"total={self.tx_total} heartbeat={self.tx_heartbeat} "
+            f"pos={self.tx_global_position} att={self.tx_attitude} "
+            f"gps={self.tx_gps} battery={self.tx_battery} "
+            f"sys_status={self.tx_sys_status} "
+            f"mission_current={self.tx_mission_current} "
+            f"mission_reached={self.tx_mission_reached} "
+            f"last={self.last_tx_message}",
         )
-
-        print(
-            f"[TX] SYSID                  : "
-            f"{self.system_id}"
-        )
-
-        print(
-            f"[TX] COMPID                 : "
-            f"{self.component_id}"
-        )
-
-        print(
-            f"[TX] Total packets          : "
-            f"{self.tx_total}"
-        )
-
-        print(
-            f"[TX] HEARTBEAT              : "
-            f"{self.tx_heartbeat}"
-        )
-
-        print(
-            f"[TX] GLOBAL_POSITION_INT    : "
-            f"{self.tx_global_position}"
-        )
-
-        print(
-            f"[TX] ATTITUDE               : "
-            f"{self.tx_attitude}"
-        )
-
-        print(
-            f"[TX] GPS_RAW_INT            : "
-            f"{self.tx_gps}"
-        )
-
-        print(
-            f"[TX] BATTERY_STATUS         : "
-            f"{self.tx_battery}"
-        )
-
-        print(
-            f"[TX] SYS_STATUS             : "
-            f"{self.tx_sys_status}"
-        )
-
-        print(
-            f"[TX] MISSION_CURRENT       : "
-            f"{self.tx_mission_current}"
-        )
-
-        print(
-            f"[TX] MISSION_ITEM_REACHED  : "
-            f"{self.tx_mission_reached}"
-        )
-
-        print(
-            f"[TX] Last message           : "
-            f"{self.last_tx_message}"
-        )
-
-        print("======================================")
 
     # ========================================================
     # UPDATE
@@ -483,10 +454,9 @@ class MAVLinkTelemetry:
 
         try:
 
-            print(
-                f"[HEARTBEAT TX] "
-                f"SYSID={self.system_id} "
-                f"COMPID={self.component_id}"
+            mav_log.debug(
+                "HEARTBEAT",
+                f"sysid={self.system_id} compid={self.component_id}",
             )
 
             message = (
@@ -507,14 +477,15 @@ class MAVLinkTelemetry:
             return self._tx_ok(
                 "HEARTBEAT",
                 result,
+                details=(
+                    f"mode={mode} "
+                    f"armed={armed}"
+                ),
             )
 
         except Exception as exc:
 
-            print(
-                "[TELEMETRY TX ERROR] "
-                f"HEARTBEAT: {exc}"
-            )
+            mav_log.error(TX, f"HEARTBEAT: {exc}")
 
             return False
 
@@ -555,15 +526,18 @@ class MAVLinkTelemetry:
             return self._tx_ok(
                 "GLOBAL_POSITION_INT",
                 result,
+                details=(
+                    f"lat={state.lat:.7f} "
+                    f"lon={state.lon:.7f} "
+                    f"alt={state.alt:.2f}m "
+                    f"hdg={state.heading:.1f}deg "
+                    f"vspd={state.vertical_speed:+.2f}m/s"
+                ),
             )
 
         except Exception as exc:
 
-            print(
-                "[TELEMETRY TX ERROR] "
-                "GLOBAL_POSITION_INT: "
-                f"{exc}"
-            )
+            mav_log.error(TX, f"GLOBAL_POSITION_INT: {exc}")
 
             return False
 
@@ -595,11 +569,7 @@ class MAVLinkTelemetry:
 
         except Exception as exc:
 
-            print(
-                "[TELEMETRY ERROR] "
-                "GPS conversion: "
-                f"{exc}"
-            )
+            mav_log.error(TX, f"GPS conversion: {exc}")
 
             return False
 
@@ -748,15 +718,18 @@ class MAVLinkTelemetry:
             return self._tx_ok(
                 "GPS_RAW_INT",
                 result,
+                details=(
+                    f"fix={fix_type} "
+                    f"sats={satellites} "
+                    f"eph={eph} epv={epv} "
+                    f"spd={speed_cm_s / 100.0:.1f}m/s "
+                    f"cog={cog / 100.0:.1f}deg"
+                ),
             )
 
         except Exception as exc:
 
-            print(
-                "[TELEMETRY TX ERROR] "
-                "GPS_RAW_INT: "
-                f"{exc}"
-            )
+            mav_log.error(TX, f"GPS_RAW_INT: {exc}")
 
             return False
 
@@ -797,14 +770,17 @@ class MAVLinkTelemetry:
             return self._tx_ok(
                 "ATTITUDE",
                 result,
+                details=(
+                    f"roll={state.roll:+.1f}deg "
+                    f"pitch={state.pitch:+.1f}deg "
+                    f"yaw={state.yaw:.1f}deg "
+                    f"gspd={state.ground_speed:.1f}m/s"
+                ),
             )
 
         except Exception as exc:
 
-            print(
-                "[TELEMETRY TX ERROR] "
-                f"ATTITUDE: {exc}"
-            )
+            mav_log.error(TX, f"ATTITUDE: {exc}")
 
             return False
 
@@ -968,14 +944,16 @@ class MAVLinkTelemetry:
             return self._tx_ok(
                 "BATTERY_STATUS",
                 result,
+                details=(
+                    f"remaining={remaining}% "
+                    f"voltage={voltage_mv / 1000.0:.2f}V "
+                    f"current={current:.2f}A"
+                ),
             )
 
         except Exception as exc:
 
-            print(
-                "[TELEMETRY TX ERROR] "
-                f"BATTERY_STATUS: {exc}"
-            )
+            mav_log.error(TX, f"BATTERY_STATUS: {exc}")
 
             return False
 
@@ -1140,14 +1118,15 @@ class MAVLinkTelemetry:
             return self._tx_ok(
                 "SYS_STATUS",
                 result,
+                details=(
+                    f"voltage={voltage_mv / 1000.0:.2f}V "
+                    f"battery={battery_remaining}%"
+                ),
             )
 
         except Exception as exc:
 
-            print(
-                "[TELEMETRY TX ERROR] "
-                f"SYS_STATUS: {exc}"
-            )
+            mav_log.error(TX, f"SYS_STATUS: {exc}")
 
             return False
 
@@ -1180,10 +1159,7 @@ class MAVLinkTelemetry:
 
         except Exception as exc:
 
-            print(
-                "[MISSION TELEMETRY ERROR] "
-                f"{exc}"
-            )
+            mav_log.error(MISSION, f"{exc}")
 
             return
 
@@ -1336,21 +1312,13 @@ class MAVLinkTelemetry:
                 != sequence
             ):
 
-                print(
-                    "[MISSION TX] "
-                    f"MISSION_CURRENT "
-                    f"seq={sequence}"
-                )
+                mav_log.info(MISSION, f"MISSION_CURRENT seq={sequence}")
 
             return success
 
         except Exception as exc:
 
-            print(
-                "[MISSION TX ERROR] "
-                "MISSION_CURRENT: "
-                f"{exc}"
-            )
+            mav_log.error(MISSION, f"MISSION_CURRENT: {exc}")
 
             return False
 
@@ -1397,11 +1365,7 @@ class MAVLinkTelemetry:
                     True,
                 )
 
-                print(
-                    "[MISSION TX] "
-                    f"MISSION_ITEM_REACHED "
-                    f"seq={sequence}"
-                )
+                mav_log.info(MISSION, f"MISSION_ITEM_REACHED seq={sequence}")
 
                 return True
 
@@ -1414,11 +1378,7 @@ class MAVLinkTelemetry:
 
         except Exception as exc:
 
-            print(
-                "[MISSION TX ERROR] "
-                "MISSION_ITEM_REACHED: "
-                f"{exc}"
-            )
+            mav_log.error(MISSION, f"MISSION_ITEM_REACHED: {exc}")
 
             return False
 
@@ -1434,7 +1394,4 @@ class MAVLinkTelemetry:
 
         self.mission_reached_seq.clear()
 
-        print(
-            "[MISSION TELEMETRY] "
-            "Mission state reset"
-        )
+        mav_log.info(MISSION, "Mission state reset")

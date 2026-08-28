@@ -2,6 +2,8 @@ from typing import Optional
 
 from pymavlink import mavutil
 
+from .mav_logger import mav_log, COMMAND
+
 
 class CommandReceiver:
 
@@ -219,10 +221,7 @@ class CommandReceiver:
 
         except Exception as exc:
 
-            print(
-                "[PARAM TX ERROR] "
-                f"{name}: {exc}"
-            )
+            mav_log.error(COMMAND, f"PARAM TX {name}: {exc}")
 
             return False
 
@@ -232,10 +231,7 @@ class CommandReceiver:
 
     def _handle_param_request_list(self) -> bool:
 
-        print(
-            "[COMMAND] PARAM_REQUEST_LIST -> "
-            f"sending {len(self.params)} params"
-        )
+        mav_log.info(COMMAND, f"PARAM_REQUEST_LIST -> sending {len(self.params)} params")
 
         ok = True
 
@@ -282,10 +278,7 @@ class CommandReceiver:
 
         if name not in self.params:
 
-            print(
-                "[COMMAND] PARAM_REQUEST_READ -> "
-                f"unknown param {name!r}"
-            )
+            mav_log.warn(COMMAND, f"PARAM_REQUEST_READ -> unknown param {name!r}")
 
             return False
 
@@ -318,10 +311,7 @@ class CommandReceiver:
 
         self.params[name] = value
 
-        print(
-            "[COMMAND] PARAM_SET -> "
-            f"{name} = {value}"
-        )
+        mav_log.info(COMMAND, f"PARAM_SET -> {name} = {value}")
 
         names = list(self.params.keys())
 
@@ -499,19 +489,13 @@ class CommandReceiver:
 
             result = self.drone.arm()
 
-            print(
-                "[COMMAND] ARM "
-                f"-> {result}"
-            )
+            mav_log.info(COMMAND, f"ARM -> {result}")
 
             return bool(result)
 
         result = self.drone.disarm()
 
-        print(
-            "[COMMAND] DISARM "
-            f"-> {result}"
-        )
+        mav_log.info(COMMAND, f"DISARM -> {result}")
 
         return bool(result)
 
@@ -579,11 +563,7 @@ class CommandReceiver:
             )
         )
 
-        print(
-            "[COMMAND] TAKEOFF "
-            f"{altitude:.1f}m "
-            f"-> {result}"
-        )
+        mav_log.info(COMMAND, f"TAKEOFF {altitude:.1f}m -> {result}")
 
         return bool(result)
 
@@ -601,10 +581,7 @@ class CommandReceiver:
             self.drone.land()
         )
 
-        print(
-            "[COMMAND] LAND "
-            f"-> {result}"
-        )
+        mav_log.info(COMMAND, f"LAND -> {result}")
 
         return bool(result)
 
@@ -622,10 +599,7 @@ class CommandReceiver:
             self.drone.rtl()
         )
 
-        print(
-            "[COMMAND] RTL "
-            f"-> {result}"
-        )
+        mav_log.info(COMMAND, f"RTL -> {result}")
 
         return bool(result)
 
@@ -643,10 +617,7 @@ class CommandReceiver:
             self.drone.start_mission()
         )
 
-        print(
-            "[COMMAND] MISSION START "
-            f"-> {result}"
-        )
+        mav_log.info(COMMAND, f"MISSION START -> {result}")
 
         return bool(result)
 
@@ -743,9 +714,7 @@ class CommandReceiver:
 
             self.drone.state.mode = "GUIDED"
 
-            print(
-                "[COMMAND] MODE -> GUIDED"
-            )
+            mav_log.info(COMMAND, "MODE -> GUIDED")
 
             return True
 
@@ -757,9 +726,7 @@ class CommandReceiver:
                 0.0
             )
 
-            print(
-                "[COMMAND] MODE -> HOLD"
-            )
+            mav_log.info(COMMAND, "MODE -> HOLD")
 
             return True
 
@@ -872,11 +839,6 @@ class CommandReceiver:
 
         self.drone.state.mode = "GUIDED"
 
-        print(
-            "[COMMAND] POSITION TARGET "
-            f"{lat:.7f}, "
-            f"{lon:.7f}, "
-            f"{altitude:.1f}m"
-        )
+        mav_log.info(COMMAND, f"POSITION TARGET {lat:.7f}, {lon:.7f}, {altitude:.1f}m")
 
         return True
