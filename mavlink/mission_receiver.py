@@ -13,6 +13,7 @@ class MissionReceiver:
         mission: Mission,
         system_id: int,
         component_id: int,
+        get_home_position=None,
     ):
 
         self.connection = connection
@@ -22,6 +23,11 @@ class MissionReceiver:
         self.system_id = system_id
 
         self.component_id = component_id
+
+        # Callable returning {"lat", "lon", "alt"} for the
+        # drone's home position, used to resolve
+        # MAV_CMD_NAV_RETURN_TO_LAUNCH mission items.
+        self.get_home_position = get_home_position
 
         # ====================================================
         # UPLOAD STATE
@@ -502,6 +508,8 @@ class MissionReceiver:
             mavutil.mavlink.MAV_CMD_NAV_TAKEOFF,
 
             mavutil.mavlink.MAV_CMD_NAV_LAND,
+
+            mavutil.mavlink.MAV_CMD_NAV_RETURN_TO_LAUNCH,
         }
 
         if command not in supported_commands:
@@ -514,50 +522,76 @@ class MissionReceiver:
             return False
 
         # ----------------------------------------------------
-        # GPS coordinates.
+        # MAV_CMD_NAV_RETURN_TO_LAUNCH:
+        #
+        # GCS usually sends x=y=z=0 for this item. The real
+        # target is the drone's home position.
         # ----------------------------------------------------
 
-        try:
+        if (
+            command
+            == mavutil.mavlink.MAV_CMD_NAV_RETURN_TO_LAUNCH
+        ):
 
-            latitude = (
-                float(message.x)
-                / 10_000_000.0
-            )
+            home = self._resolve_home()
 
-            longitude = (
-                float(message.y)
-                / 10_000_000.0
-            )
+            if home is None:
 
-            altitude = (
-                self._resolve_altitude(
-                    message
+                return False
+
+            latitude = home["lat"]
+
+            longitude = home["lon"]
+
+            altitude = home["alt"]
+
+        else:
+
+            # ------------------------------------------------
+            # GPS coordinates.
+            # ------------------------------------------------
+
+            try:
+
+                latitude = (
+                    float(message.x)
+                    / 10_000_000.0
                 )
-            )
 
-        except Exception:
+                longitude = (
+                    float(message.y)
+                    / 10_000_000.0
+                )
 
-            return False
+                altitude = (
+                    self._resolve_altitude(
+                        message
+                    )
+                )
 
-        # ----------------------------------------------------
-        # Coordinate validation.
-        # ----------------------------------------------------
+            except Exception:
 
-        if not (
-            -90.0
-            <= latitude
-            <= 90.0
-        ):
+                return False
 
-            return False
+            # ------------------------------------------------
+            # Coordinate validation.
+            # ------------------------------------------------
 
-        if not (
-            -180.0
-            <= longitude
-            <= 180.0
-        ):
+            if not (
+                -90.0
+                <= latitude
+                <= 90.0
+            ):
 
-            return False
+                return False
+
+            if not (
+                -180.0
+                <= longitude
+                <= 180.0
+            ):
+
+                return False
 
         # ----------------------------------------------------
         # MAV_CMD_NAV_WAYPOINT:
@@ -590,6 +624,11 @@ class MissionReceiver:
 
         speed = 5.0
 
+        is_rtl = (
+            command
+            == mavutil.mavlink.MAV_CMD_NAV_RETURN_TO_LAUNCH
+        )
+
         waypoint = (
             self.staging_mission
             .add_waypoint(
@@ -598,13 +637,22 @@ class MissionReceiver:
                 altitude=altitude,
                 speed=speed,
                 hold_time=hold_time,
-                name=f"WP{sequence + 1}",
+                name=(
+                    "RTL"
+                    if is_rtl
+                    else f"WP{sequence + 1}"
+                ),
+                action=(
+                    "rtl"
+                    if is_rtl
+                    else "waypoint"
+                ),
             )
         )
 
         print(
             "[MISSION RX] "
-            f"WP{waypoint.index}: "
+            f"{waypoint.name}: "
             f"LAT={latitude:.7f} "
             f"LON={longitude:.7f} "
             f"ALT={altitude:.2f} "
@@ -655,6 +703,8 @@ class MissionReceiver:
             mavutil.mavlink.MAV_CMD_NAV_TAKEOFF,
 
             mavutil.mavlink.MAV_CMD_NAV_LAND,
+
+            mavutil.mavlink.MAV_CMD_NAV_RETURN_TO_LAUNCH,
         }
 
         if command not in supported_commands:
@@ -666,21 +716,42 @@ class MissionReceiver:
 
             return False
 
-        if not (
-            -90.0
-            <= latitude
-            <= 90.0
-        ):
+        is_rtl = (
+            command
+            == mavutil.mavlink.MAV_CMD_NAV_RETURN_TO_LAUNCH
+        )
 
-            return False
+        if is_rtl:
 
-        if not (
-            -180.0
-            <= longitude
-            <= 180.0
-        ):
+            home = self._resolve_home()
 
-            return False
+            if home is None:
+
+                return False
+
+            latitude = home["lat"]
+
+            longitude = home["lon"]
+
+            altitude = home["alt"]
+
+        else:
+
+            if not (
+                -90.0
+                <= latitude
+                <= 90.0
+            ):
+
+                return False
+
+            if not (
+                -180.0
+                <= longitude
+                <= 180.0
+            ):
+
+                return False
 
         hold_time = 0.0
 
@@ -705,19 +776,54 @@ class MissionReceiver:
                 altitude=altitude,
                 speed=5.0,
                 hold_time=hold_time,
-                name=f"WP{sequence + 1}",
+                name=(
+                    "RTL"
+                    if is_rtl
+                    else f"WP{sequence + 1}"
+                ),
+                action=(
+                    "rtl"
+                    if is_rtl
+                    else "waypoint"
+                ),
             )
         )
 
         print(
             "[MISSION RX] "
-            f"WP{waypoint.index}: "
+            f"{waypoint.name}: "
             f"LAT={latitude:.7f} "
             f"LON={longitude:.7f} "
             f"ALT={altitude:.2f}"
         )
 
         return True
+
+    # ========================================================
+    # HOME
+    # ========================================================
+
+    def _resolve_home(
+        self,
+    ) -> Optional[dict]:
+
+        if self.get_home_position is None:
+
+            return None
+
+        try:
+
+            home = self.get_home_position()
+
+            return {
+                "lat": float(home["lat"]),
+                "lon": float(home["lon"]),
+                "alt": float(home["alt"]),
+            }
+
+        except Exception:
+
+            return None
 
     # ========================================================
     # ALTITUDE
@@ -834,40 +940,15 @@ class MissionReceiver:
             else 0
         )
 
-        try:
-
-            mav.mission_request_int_send(
+        if not self._encode_and_send(
+            mav,
+            "mission_request_int_encode",
+            (
                 target_system,
                 target_component,
                 int(sequence),
-            )
-
-        except TypeError:
-
-            try:
-
-                mav.mission_request_int_send(
-                    target_system,
-                    target_component,
-                    int(sequence),
-                    mavutil.mavlink.MAV_MISSION_TYPE_MISSION,
-                )
-
-            except Exception as exc:
-
-                print(
-                    "[MISSION TX ERROR] "
-                    f"{type(exc).__name__}: {exc}"
-                )
-
-                return
-
-        except Exception as exc:
-
-            print(
-                "[MISSION TX ERROR] "
-                f"{type(exc).__name__}: {exc}"
-            )
+            ),
+        ):
 
             return
 
@@ -900,6 +981,7 @@ class MissionReceiver:
                 speed=waypoint.speed,
                 hold_time=waypoint.hold_time,
                 name=waypoint.name,
+                action=waypoint.action,
             )
 
         self.upload_active = False
@@ -1078,40 +1160,15 @@ class MissionReceiver:
             else 0
         )
 
-        try:
-
-            mav.mission_count_send(
+        if not self._encode_and_send(
+            mav,
+            "mission_count_encode",
+            (
                 target_system,
                 target_component,
                 int(count),
-            )
-
-        except TypeError:
-
-            try:
-
-                mav.mission_count_send(
-                    target_system,
-                    target_component,
-                    int(count),
-                    mavutil.mavlink.MAV_MISSION_TYPE_MISSION,
-                )
-
-            except Exception as exc:
-
-                print(
-                    "[MISSION TX ERROR] "
-                    f"{type(exc).__name__}: {exc}"
-                )
-
-                return
-
-        except Exception as exc:
-
-            print(
-                "[MISSION TX ERROR] "
-                f"{type(exc).__name__}: {exc}"
-            )
+            ),
+        ):
 
             return
 
@@ -1157,14 +1214,19 @@ class MissionReceiver:
             else 0
         )
 
-        try:
-
-            mav.mission_item_int_send(
+        if not self._encode_and_send(
+            mav,
+            "mission_item_int_encode",
+            (
                 target_system,
                 target_component,
                 int(sequence),
                 mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT,
-                mavutil.mavlink.MAV_CMD_NAV_WAYPOINT,
+                (
+                    mavutil.mavlink.MAV_CMD_NAV_RETURN_TO_LAUNCH
+                    if waypoint.action == "rtl"
+                    else mavutil.mavlink.MAV_CMD_NAV_WAYPOINT
+                ),
                 0,
                 1,
                 float(waypoint.hold_time),
@@ -1184,55 +1246,8 @@ class MissionReceiver:
                     )
                 ),
                 float(waypoint.altitude),
-            )
-
-        except TypeError:
-
-            try:
-
-                mav.mission_item_int_send(
-                    target_system,
-                    target_component,
-                    int(sequence),
-                    mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT,
-                    mavutil.mavlink.MAV_CMD_NAV_WAYPOINT,
-                    0,
-                    1,
-                    float(waypoint.hold_time),
-                    0.0,
-                    0.0,
-                    0.0,
-                    int(
-                        round(
-                            waypoint.latitude
-                            * 10_000_000.0
-                        )
-                    ),
-                    int(
-                        round(
-                            waypoint.longitude
-                            * 10_000_000.0
-                        )
-                    ),
-                    float(waypoint.altitude),
-                    mavutil.mavlink.MAV_MISSION_TYPE_MISSION,
-                )
-
-            except Exception as exc:
-
-                print(
-                    "[MISSION TX ERROR] "
-                    f"{type(exc).__name__}: {exc}"
-                )
-
-                return
-
-        except Exception as exc:
-
-            print(
-                "[MISSION TX ERROR] "
-                f"{type(exc).__name__}: {exc}"
-            )
+            ),
+        ):
 
             return
 
@@ -1278,14 +1293,19 @@ class MissionReceiver:
             else 0
         )
 
-        try:
-
-            mav.mission_item_send(
+        if not self._encode_and_send(
+            mav,
+            "mission_item_encode",
+            (
                 target_system,
                 target_component,
                 int(sequence),
                 mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT,
-                mavutil.mavlink.MAV_CMD_NAV_WAYPOINT,
+                (
+                    mavutil.mavlink.MAV_CMD_NAV_RETURN_TO_LAUNCH
+                    if waypoint.action == "rtl"
+                    else mavutil.mavlink.MAV_CMD_NAV_WAYPOINT
+                ),
                 0,
                 1,
                 float(waypoint.hold_time),
@@ -1295,14 +1315,8 @@ class MissionReceiver:
                 float(waypoint.latitude),
                 float(waypoint.longitude),
                 float(waypoint.altitude),
-            )
-
-        except Exception as exc:
-
-            print(
-                "[MISSION TX ERROR] "
-                f"{type(exc).__name__}: {exc}"
-            )
+            ),
+        ):
 
             return
 
@@ -1390,46 +1404,85 @@ class MissionReceiver:
             else 0
         )
 
-        try:
-
-            mav.mission_ack_send(
+        if not self._encode_and_send(
+            mav,
+            "mission_ack_encode",
+            (
                 target_system,
                 target_component,
                 result,
-            )
-
-        except TypeError:
-
-            try:
-
-                mav.mission_ack_send(
-                    target_system,
-                    target_component,
-                    result,
-                    mavutil.mavlink.MAV_MISSION_TYPE_MISSION,
-                )
-
-            except Exception as exc:
-
-                print(
-                    "[MISSION ACK ERROR] "
-                    f"{type(exc).__name__}: {exc}"
-                )
-
-                return
-
-        except Exception as exc:
-
-            print(
-                "[MISSION ACK ERROR] "
-                f"{type(exc).__name__}: {exc}"
-            )
+            ),
+            error_label="MISSION ACK ERROR",
+        ):
 
             return
 
         print(
             "[MISSION TX] "
             f"MISSION_ACK={result}"
+        )
+
+    # ========================================================
+    # ENCODE + SEND
+    #
+    # mav.<name>_send(...) writes to MAVLink.file, which is
+    # None for this UDP-socket-based connection - it always
+    # raises AttributeError. Build the message with
+    # <name>_encode(...) instead and push the raw bytes out
+    # through MAVLinkConnection.send(), matching the pattern
+    # used by mavlink/telemetry.py.
+    # ========================================================
+
+    def _encode_and_send(
+        self,
+        mav,
+        encode_name: str,
+        args: tuple,
+        error_label: str = "MISSION TX ERROR",
+    ) -> bool:
+
+        encode = getattr(
+            mav,
+            encode_name,
+        )
+
+        try:
+
+            message = encode(
+                *args
+            )
+
+        except TypeError:
+
+            try:
+
+                message = encode(
+                    *args,
+                    mavutil.mavlink.MAV_MISSION_TYPE_MISSION,
+                )
+
+            except Exception as exc:
+
+                print(
+                    f"[{error_label}] "
+                    f"{type(exc).__name__}: {exc}"
+                )
+
+                return False
+
+        except Exception as exc:
+
+            print(
+                f"[{error_label}] "
+                f"{type(exc).__name__}: {exc}"
+            )
+
+            return False
+
+        return bool(
+            self.connection.send(
+                message
+            )
         )
 
     # ========================================================

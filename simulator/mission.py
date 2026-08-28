@@ -23,6 +23,9 @@ class Waypoint:
 
     name: str = ""
 
+    # "waypoint", "takeoff", "land" or "rtl"
+    action: str = "waypoint"
+
 
 # ============================================================
 # MISSION
@@ -58,6 +61,7 @@ class Mission:
         speed: float = 5.0,
         hold_time: float = 0.0,
         name: str = "",
+        action: str = "waypoint",
     ) -> Waypoint:
 
         waypoint = Waypoint(
@@ -74,6 +78,7 @@ class Mission:
                 float(hold_time),
             ),
             name=str(name),
+            action=str(action),
         )
 
         self.waypoints.append(

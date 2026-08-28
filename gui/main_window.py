@@ -21,6 +21,8 @@ from PySide6.QtWidgets import (
 from gui.simulation_worker import SimulationWorker
 from gui.drone_config_panel import DroneConfigPanel
 from gui.mavlink_config_panel import MAVLinkConfigPanel
+from gui.joystick_panel import JoystickPanel
+from gui.mission_panel import MissionPanel
 
 
 # ============================================================
@@ -257,7 +259,18 @@ class MainWindow(QMainWindow):
             True
         )
 
+        scroll.setAlignment(
+            Qt.AlignHCenter
+        )
+
         content = QWidget()
+
+        # Keep the form-style panels at a readable width and
+        # center them instead of stretching labels/fields
+        # across a maximized ultra-wide window.
+        content.setMaximumWidth(
+            1400
+        )
 
         content_layout = QVBoxLayout(
             content
@@ -313,6 +326,38 @@ class MainWindow(QMainWindow):
 
         self._create_live_control_panel(
             content_layout
+        )
+
+        # ====================================================
+        # JOYSTICK
+        # ====================================================
+
+        self.joystick_panel = (
+            JoystickPanel()
+        )
+
+        self.joystick_panel.on_command = (
+            self._on_joystick_command
+        )
+
+        content_layout.addWidget(
+            self.joystick_panel
+        )
+
+        # ====================================================
+        # MISSION
+        # ====================================================
+
+        self.mission_panel = (
+            MissionPanel()
+        )
+
+        self.mission_panel.on_command = (
+            self._on_mission_command
+        )
+
+        content_layout.addWidget(
+            self.mission_panel
         )
 
         # ====================================================
@@ -1417,6 +1462,10 @@ class MainWindow(QMainWindow):
             self.on_status_changed
         )
 
+        self.worker.mission_updated.connect(
+            self.mission_panel.set_waypoints
+        )
+
         self.worker.error_occurred.connect(
             self.on_error
         )
@@ -1493,6 +1542,14 @@ class MainWindow(QMainWindow):
             False
         )
 
+        self.joystick_panel.set_enabled(
+            False
+        )
+
+        self.mission_panel.set_enabled(
+            False
+        )
+
         self.start_button.setEnabled(
             True
         )
@@ -1543,6 +1600,14 @@ class MainWindow(QMainWindow):
                 True
             )
 
+            self.joystick_panel.set_enabled(
+                True
+            )
+
+            self.mission_panel.set_enabled(
+                True
+            )
+
         elif status == "STOPPED":
 
             self.status_label.setText(
@@ -1557,6 +1622,14 @@ class MainWindow(QMainWindow):
                 False
             )
 
+            self.joystick_panel.set_enabled(
+                False
+            )
+
+            self.mission_panel.set_enabled(
+                False
+            )
+
         elif status == "ERROR":
 
             self.status_label.setText(
@@ -1564,6 +1637,14 @@ class MainWindow(QMainWindow):
             )
 
             self.live_frame.setEnabled(
+                False
+            )
+
+            self.joystick_panel.set_enabled(
+                False
+            )
+
+            self.mission_panel.set_enabled(
                 False
             )
 
@@ -1972,6 +2053,44 @@ class MainWindow(QMainWindow):
         )
 
     # ========================================================
+    # JOYSTICK
+    # ========================================================
+
+    def _on_joystick_command(
+        self,
+        command,
+        value,
+    ):
+
+        if not self._worker_running():
+
+            return
+
+        self.worker.queue_command(
+            command,
+            value,
+        )
+
+    # ========================================================
+    # MISSION
+    # ========================================================
+
+    def _on_mission_command(
+        self,
+        command,
+        value,
+    ):
+
+        if not self._worker_running():
+
+            return
+
+        self.worker.queue_command(
+            command,
+            value,
+        )
+
+    # ========================================================
     # TELEMETRY
     # ========================================================
 
@@ -2272,6 +2391,10 @@ class MainWindow(QMainWindow):
             100.0,
         )
 
+        self.joystick_panel.sync_targets(
+            status
+        )
+
         # ----------------------------------------------------
         # Mode sync
         # ----------------------------------------------------
@@ -2533,6 +2656,14 @@ class MainWindow(QMainWindow):
         )
 
         self.live_frame.setEnabled(
+            False
+        )
+
+        self.joystick_panel.set_enabled(
+            False
+        )
+
+        self.mission_panel.set_enabled(
             False
         )
 

@@ -1,7 +1,27 @@
 from typing import Optional
 
+from pymavlink import mavutil
+
 
 class CommandReceiver:
+
+    # ============================================================
+    # MINIMAL PARAMETER SET
+    #
+    # This simulator has no real parameter storage. Ground
+    # stations (Mission Planner / QGroundControl) hang on
+    # "Getting params..." forever if PARAM_REQUEST_LIST is
+    # never answered, so we advertise a small fixed set just
+    # to let the parameter download complete.
+    # ============================================================
+
+    DEFAULT_PARAMS = {
+        "SYSID_THISMAV": 1.0,
+        "ARMING_CHECK": 1.0,
+        "FRAME_CLASS": 1.0,
+        "FRAME_TYPE": 1.0,
+        "FS_THR_ENABLE": 0.0,
+    }
 
     def __init__(
         self,
@@ -13,6 +33,10 @@ class CommandReceiver:
         self.connection = connection
 
         self.controller = controller
+
+        self.params = dict(
+            self.DEFAULT_PARAMS
+        )
 
         # ----------------------------------------------------
         # Prefer explicit drone.
@@ -112,7 +136,200 @@ class CommandReceiver:
                 message
             )
 
+        # ====================================================
+        # PARAM_REQUEST_LIST
+        # ====================================================
+
+        if message_type == "PARAM_REQUEST_LIST":
+
+            return self._handle_param_request_list()
+
+        # ====================================================
+        # PARAM_REQUEST_READ
+        # ====================================================
+
+        if message_type == "PARAM_REQUEST_READ":
+
+            return self._handle_param_request_read(
+                message
+            )
+
+        # ====================================================
+        # PARAM_SET
+        # ====================================================
+
+        if message_type == "PARAM_SET":
+
+            return self._handle_param_set(
+                message
+            )
+
         return False
+
+    # ========================================================
+    # PARAM HELPERS
+    # ========================================================
+
+    @staticmethod
+    def _param_id_of(message) -> str:
+
+        param_id = getattr(
+            message,
+            "param_id",
+            "",
+        )
+
+        if isinstance(param_id, bytes):
+
+            param_id = param_id.decode(
+                "ascii",
+                errors="ignore",
+            )
+
+        return str(param_id).rstrip("\x00")
+
+    # --------------------------------------------------------
+
+    def _send_param_value(
+        self,
+        name: str,
+        value: float,
+        index: int,
+    ) -> bool:
+
+        if self.connection is None:
+            return False
+
+        try:
+
+            message = (
+                self.connection.mavlink
+                .param_value_encode(
+                    name.encode("ascii"),
+                    float(value),
+                    mavutil.mavlink.MAV_PARAM_TYPE_REAL32,
+                    len(self.params),
+                    index,
+                )
+            )
+
+            return bool(
+                self.connection.send(message)
+            )
+
+        except Exception as exc:
+
+            print(
+                "[PARAM TX ERROR] "
+                f"{name}: {exc}"
+            )
+
+            return False
+
+    # ========================================================
+    # PARAM_REQUEST_LIST
+    # ========================================================
+
+    def _handle_param_request_list(self) -> bool:
+
+        print(
+            "[COMMAND] PARAM_REQUEST_LIST -> "
+            f"sending {len(self.params)} params"
+        )
+
+        ok = True
+
+        for index, (name, value) in enumerate(
+            self.params.items()
+        ):
+
+            if not self._send_param_value(
+                name,
+                value,
+                index,
+            ):
+
+                ok = False
+
+        return ok
+
+    # ========================================================
+    # PARAM_REQUEST_READ
+    # ========================================================
+
+    def _handle_param_request_read(
+        self,
+        message,
+    ) -> bool:
+
+        param_index = int(
+            getattr(
+                message,
+                "param_index",
+                -1,
+            )
+        )
+
+        names = list(self.params.keys())
+
+        if 0 <= param_index < len(names):
+
+            name = names[param_index]
+
+        else:
+
+            name = self._param_id_of(message)
+
+        if name not in self.params:
+
+            print(
+                "[COMMAND] PARAM_REQUEST_READ -> "
+                f"unknown param {name!r}"
+            )
+
+            return False
+
+        index = names.index(name) if name in names else 0
+
+        return self._send_param_value(
+            name,
+            self.params[name],
+            index,
+        )
+
+    # ========================================================
+    # PARAM_SET
+    # ========================================================
+
+    def _handle_param_set(
+        self,
+        message,
+    ) -> bool:
+
+        name = self._param_id_of(message)
+
+        value = float(
+            getattr(
+                message,
+                "param_value",
+                0.0,
+            )
+        )
+
+        self.params[name] = value
+
+        print(
+            "[COMMAND] PARAM_SET -> "
+            f"{name} = {value}"
+        )
+
+        names = list(self.params.keys())
+
+        return self._send_param_value(
+            name,
+            value,
+            names.index(name),
+        )
 
     # ========================================================
     # COMMAND_LONG

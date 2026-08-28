@@ -31,6 +31,30 @@ class MissionNavigator:
             return False
 
         # ----------------------------------------------------
+        # Resume from where the mission was stopped.
+        #
+        # STOP does not reset mission.current_index, so if
+        # the mission was already in progress (and not
+        # finished), continue from the current waypoint
+        # instead of restarting from waypoint 1.
+        # ----------------------------------------------------
+
+        if (
+            self.mission.is_started()
+            and not self.mission.is_finished()
+            and self.mission.get_current_waypoint()
+            is not None
+        ):
+
+            self.active = True
+
+            self.completed = False
+
+            self._set_current_waypoint_target()
+
+            return True
+
+        # ----------------------------------------------------
         # Reset previous execution state.
         # ----------------------------------------------------
 

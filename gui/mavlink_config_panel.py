@@ -68,12 +68,12 @@ class MAVLinkConfigPanel(QGroupBox):
         )
 
         layout.addRow(
-            "IP Address:",
+            "IP Address (GCS):",
             self.ip_address,
         )
 
         # ====================================================
-        # PORT
+        # PORT (TX -> GCS)
         # ====================================================
 
         self.port = QSpinBox()
@@ -88,8 +88,28 @@ class MAVLinkConfigPanel(QGroupBox):
         )
 
         layout.addRow(
-            "Port:",
+            "Port (TX):",
             self.port,
+        )
+
+        # ====================================================
+        # RX PORT (GCS -> simulator)
+        # ====================================================
+
+        self.rx_port = QSpinBox()
+
+        self.rx_port.setRange(
+            1,
+            65535,
+        )
+
+        self.rx_port.setValue(
+            14551
+        )
+
+        layout.addRow(
+            "Port (RX):",
+            self.rx_port,
         )
 
         # ====================================================
@@ -183,6 +203,8 @@ class MAVLinkConfigPanel(QGroupBox):
 
         port = self.port.value()
 
+        rx_port = self.rx_port.value()
+
         system_id = (
             self.system_id.value()
         )
@@ -200,7 +222,7 @@ class MAVLinkConfigPanel(QGroupBox):
         # ----------------------------------------------------
 
         connection_string = (
-            f"udp:0.0.0.0:{port}"
+            f"udp:{ip_address}:{port}"
         )
 
         return {
@@ -209,6 +231,20 @@ class MAVLinkConfigPanel(QGroupBox):
             "ip_address": ip_address,
 
             "port": port,
+
+            # ------------------------------------------------
+            # Consumed directly by SimulationWorker to build
+            # the MAVLinkConnection - keep in sync with
+            # ip_address / port / rx_port above.
+            # ------------------------------------------------
+
+            "tx_host": ip_address,
+
+            "tx_port": port,
+
+            "rx_host": "0.0.0.0",
+
+            "rx_port": rx_port,
 
             "system_id": system_id,
 
@@ -237,6 +273,10 @@ class MAVLinkConfigPanel(QGroupBox):
         )
 
         self.port.setEnabled(
+            enabled
+        )
+
+        self.rx_port.setEnabled(
             enabled
         )
 
