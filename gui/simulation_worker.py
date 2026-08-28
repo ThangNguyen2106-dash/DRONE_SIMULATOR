@@ -1,10 +1,8 @@
 import time
 import traceback
+import queue
 
-from PySide6.QtCore import (
-    QThread,
-    Signal,
-)
+from PySide6.QtCore import QThread, Signal
 
 from simulator.drone import Drone
 from simulator.flight_controller import FlightController
@@ -16,6 +14,40 @@ from mavlink.command_receiver import CommandReceiver
 
 
 class SimulationWorker(QThread):
+    """
+    Main simulation worker.
+
+    Architecture:
+
+        Drone Simulator
+              |
+              | MAVLink TX
+              v
+        Ground Station
+              |
+              | MAVLink RX
+              v
+        Drone Simulator
+
+    Runtime control:
+
+        GUI
+         |
+         | queue_command()
+         v
+        Thread-safe Queue
+         |
+         v
+        Simulation Thread
+         |
+         v
+        Drone / FlightModel
+
+    Default UDP configuration:
+
+        Simulator TX -> 127.0.0.1:14550
+        Simulator RX <- 0.0.0.0:14551
+    """
 
     # ========================================================
     # SIGNALS
@@ -37,28 +69,41 @@ class SimulationWorker(QThread):
         mavlink_config=None,
         parent=None,
     ):
-
         super().__init__(parent)
 
         self.drone_config = (
-            drone_config or {}
+            drone_config
+            if isinstance(
+                drone_config,
+                dict,
+            )
+            else {}
         )
 
         self.mavlink_config = (
-            mavlink_config or {}
+            mavlink_config
+            if isinstance(
+                mavlink_config,
+                dict,
+            )
+            else {}
         )
+
+        # ====================================================
+        # THREAD STATE
+        # ====================================================
+
+        self.running = False
 
         # ====================================================
         # RUNTIME COMMAND QUEUE
         # ====================================================
 
-        self.command_queue = []
+        self.command_queue = queue.Queue()
 
         # ====================================================
-        # STATE
+        # OBJECTS
         # ====================================================
-
-        self.running = False
 
         self.drone = None
 
@@ -73,7 +118,7 @@ class SimulationWorker(QThread):
         self.command_receiver = None
 
         # ====================================================
-        # INITIAL RUNTIME VALUES
+        # RUNTIME STATUS
         # ====================================================
 
         self.runtime_mode = None
@@ -106,33 +151,54 @@ class SimulationWorker(QThread):
         value=None,
     ):
         """
-        Add a runtime command.
+        Queue a runtime command.
 
-        This method can be called by the GUI thread.
-
-        The actual Drone modification happens inside
-        SimulationWorker.run(), therefore all simulation
-        objects remain owned by the simulation thread.
+        Safe to call from the GUI thread while the
+        simulation is running.
         """
 
-        self.command_queue.append(
-            (
-                command,
-                value,
+        try:
+
+            self.command_queue.put(
+                (
+                    command,
+                    value,
+                )
             )
-        )
+
+        except Exception as exc:
+
+            print(
+                "[RUNTIME QUEUE ERROR] "
+                f"{type(exc).__name__}: "
+                f"{exc}"
+            )
 
     # ========================================================
     # PROCESS RUNTIME COMMANDS
     # ========================================================
 
-    def _process_runtime_commands(self):
+    def _process_runtime_commands(
+        self,
+    ):
+        """
+        Execute all pending runtime commands.
 
-        while self.command_queue:
+        This function must only be called from the
+        simulation thread.
+        """
 
-            command, value = (
-                self.command_queue.pop(0)
-            )
+        while self.running:
+
+            try:
+
+                command, value = (
+                    self.command_queue.get_nowait()
+                )
+
+            except queue.Empty:
+
+                break
 
             try:
 
@@ -146,8 +212,13 @@ class SimulationWorker(QThread):
                 print(
                     "[RUNTIME COMMAND ERROR] "
                     f"{command}: "
-                    f"{type(exc).__name__}: {exc}"
+                    f"{type(exc).__name__}: "
+                    f"{exc}"
                 )
+
+            finally:
+
+                self.command_queue.task_done()
 
     # ========================================================
     # EXECUTE RUNTIME COMMAND
@@ -158,6 +229,12 @@ class SimulationWorker(QThread):
         command,
         value,
     ):
+        """
+        Execute one runtime command.
+
+        All Drone modifications happen inside the
+        simulation thread.
+        """
 
         if self.drone is None:
 
@@ -169,10 +246,8 @@ class SimulationWorker(QThread):
 
         if command == "mode":
 
-            result = (
-                self.drone.set_mode(
-                    value
-                )
+            result = self.drone.set_mode(
+                value
             )
 
             if result:
@@ -182,40 +257,35 @@ class SimulationWorker(QThread):
                 )
 
                 print(
-                    f"[RUNTIME] MODE "
-                    f"-> {self.runtime_mode}"
+                    "[RUNTIME] MODE -> "
+                    f"{self.runtime_mode}"
                 )
 
             else:
 
                 print(
-                    f"[RUNTIME] MODE FAILED "
-                    f"-> {value}"
+                    "[RUNTIME] MODE FAILED -> "
+                    f"{value}"
                 )
 
             return
 
         # ====================================================
-        # ALTITUDE
+        # FREE
         # ====================================================
 
-        if command == "altitude":
+        if command == "free":
 
             result = (
-                self.drone.set_altitude(
-                    value
-                )
+                self.drone.set_free_flight()
             )
 
             if result:
 
-                self.runtime_altitude = float(
-                    value
-                )
+                self.runtime_mode = "FREE"
 
                 print(
-                    f"[RUNTIME] ALTITUDE "
-                    f"-> {value}"
+                    "[RUNTIME] MODE -> FREE"
                 )
 
             return
@@ -234,17 +304,52 @@ class SimulationWorker(QThread):
 
             if result:
 
-                self.runtime_mode = (
-                    "ALT_HOLD"
-                )
+                self.runtime_mode = "ALT_HOLD"
 
-                self.runtime_altitude = float(
-                    value
+                self.runtime_altitude = (
+                    float(value)
                 )
 
                 print(
-                    f"[RUNTIME] ALT HOLD "
-                    f"-> {value}"
+                    "[RUNTIME] ALT HOLD -> "
+                    f"{value:.2f} m"
+                )
+
+            else:
+
+                print(
+                    "[RUNTIME] ALT HOLD FAILED"
+                )
+
+            return
+
+        # ====================================================
+        # ALTITUDE
+        # ====================================================
+
+        if command == "altitude":
+
+            result = (
+                self.drone.set_altitude(
+                    value
+                )
+            )
+
+            if result:
+
+                self.runtime_altitude = (
+                    float(value)
+                )
+
+                print(
+                    "[RUNTIME] ALTITUDE -> "
+                    f"{value:.2f} m"
+                )
+
+            else:
+
+                print(
+                    "[RUNTIME] ALTITUDE FAILED"
                 )
 
             return
@@ -263,13 +368,19 @@ class SimulationWorker(QThread):
 
             if result:
 
-                self.runtime_speed = float(
-                    value
+                self.runtime_speed = (
+                    float(value)
                 )
 
                 print(
-                    f"[RUNTIME] SPEED "
-                    f"-> {value}"
+                    "[RUNTIME] SPEED -> "
+                    f"{value:.2f} m/s"
+                )
+
+            else:
+
+                print(
+                    "[RUNTIME] SPEED FAILED"
                 )
 
             return
@@ -288,13 +399,19 @@ class SimulationWorker(QThread):
 
             if result:
 
-                self.runtime_heading = float(
-                    value
+                self.runtime_heading = (
+                    float(value)
                 )
 
                 print(
-                    f"[RUNTIME] HEADING "
-                    f"-> {value}"
+                    "[RUNTIME] HEADING -> "
+                    f"{value:.2f} deg"
+                )
+
+            else:
+
+                print(
+                    "[RUNTIME] HEADING FAILED"
                 )
 
             return
@@ -313,13 +430,13 @@ class SimulationWorker(QThread):
 
             if result:
 
-                self.runtime_latitude = float(
-                    value
+                self.runtime_latitude = (
+                    float(value)
                 )
 
                 print(
-                    f"[RUNTIME] LATITUDE "
-                    f"-> {value}"
+                    "[RUNTIME] LATITUDE -> "
+                    f"{value:.7f}"
                 )
 
             return
@@ -338,13 +455,13 @@ class SimulationWorker(QThread):
 
             if result:
 
-                self.runtime_longitude = float(
-                    value
+                self.runtime_longitude = (
+                    float(value)
                 )
 
                 print(
-                    f"[RUNTIME] LONGITUDE "
-                    f"-> {value}"
+                    "[RUNTIME] LONGITUDE -> "
+                    f"{value:.7f}"
                 )
 
             return
@@ -354,6 +471,13 @@ class SimulationWorker(QThread):
         # ====================================================
 
         if command == "position":
+
+            if not isinstance(
+                value,
+                dict,
+            ):
+
+                return
 
             latitude = value.get(
                 "latitude"
@@ -378,26 +502,31 @@ class SimulationWorker(QThread):
 
             if result:
 
-                self.runtime_latitude = float(
-                    latitude
+                self.runtime_latitude = (
+                    float(latitude)
                 )
 
-                self.runtime_longitude = float(
-                    longitude
+                self.runtime_longitude = (
+                    float(longitude)
                 )
 
                 if altitude is not None:
 
-                    self.runtime_altitude = float(
-                        altitude
+                    self.runtime_altitude = (
+                        float(altitude)
                     )
 
                 print(
-                    "[RUNTIME] POSITION "
-                    f"-> "
-                    f"{latitude}, "
-                    f"{longitude}, "
-                    f"{altitude}"
+                    "[RUNTIME] POSITION -> "
+                    f"LAT={latitude:.7f} "
+                    f"LON={longitude:.7f} "
+                    f"ALT={altitude}"
+                )
+
+            else:
+
+                print(
+                    "[RUNTIME] POSITION FAILED"
                 )
 
             return
@@ -416,8 +545,13 @@ class SimulationWorker(QThread):
 
             if result:
 
-                self.runtime_roll = float(
-                    value
+                self.runtime_roll = (
+                    float(value)
+                )
+
+                print(
+                    "[RUNTIME] ROLL -> "
+                    f"{value:.2f} deg"
                 )
 
             return
@@ -436,8 +570,13 @@ class SimulationWorker(QThread):
 
             if result:
 
-                self.runtime_pitch = float(
-                    value
+                self.runtime_pitch = (
+                    float(value)
+                )
+
+                print(
+                    "[RUNTIME] PITCH -> "
+                    f"{value:.2f} deg"
                 )
 
             return
@@ -456,8 +595,13 @@ class SimulationWorker(QThread):
 
             if result:
 
-                self.runtime_yaw = float(
-                    value
+                self.runtime_yaw = (
+                    float(value)
+                )
+
+                print(
+                    "[RUNTIME] YAW -> "
+                    f"{value:.2f} deg"
                 )
 
             return
@@ -467,6 +611,13 @@ class SimulationWorker(QThread):
         # ====================================================
 
         if command == "attitude":
+
+            if not isinstance(
+                value,
+                dict,
+            ):
+
+                return
 
             result = (
                 self.drone.set_attitude(
@@ -502,6 +653,10 @@ class SimulationWorker(QThread):
                         value["yaw"]
                     )
 
+                print(
+                    "[RUNTIME] ATTITUDE UPDATED"
+                )
+
             return
 
         # ====================================================
@@ -518,13 +673,13 @@ class SimulationWorker(QThread):
 
             if result:
 
-                self.runtime_battery = float(
-                    value
+                self.runtime_battery = (
+                    float(value)
                 )
 
                 print(
-                    f"[RUNTIME] BATTERY "
-                    f"-> {value}%"
+                    "[RUNTIME] BATTERY -> "
+                    f"{value:.1f}%"
                 )
 
             return
@@ -562,7 +717,7 @@ class SimulationWorker(QThread):
             if result:
 
                 print(
-                    "[RUNTIME] GPS updated"
+                    "[RUNTIME] GPS UPDATED"
                 )
 
             return
@@ -578,7 +733,8 @@ class SimulationWorker(QThread):
             )
 
             print(
-                f"[RUNTIME] ARM -> {result}"
+                "[RUNTIME] ARM -> "
+                f"{result}"
             )
 
             return
@@ -594,7 +750,8 @@ class SimulationWorker(QThread):
             )
 
             print(
-                f"[RUNTIME] DISARM -> {result}"
+                "[RUNTIME] DISARM -> "
+                f"{result}"
             )
 
             return
@@ -612,8 +769,9 @@ class SimulationWorker(QThread):
             )
 
             print(
-                f"[RUNTIME] TAKEOFF "
-                f"{value}m -> {result}"
+                "[RUNTIME] TAKEOFF "
+                f"{value}m -> "
+                f"{result}"
             )
 
             return
@@ -629,7 +787,8 @@ class SimulationWorker(QThread):
             )
 
             print(
-                f"[RUNTIME] LAND -> {result}"
+                "[RUNTIME] LAND -> "
+                f"{result}"
             )
 
             return
@@ -645,24 +804,8 @@ class SimulationWorker(QThread):
             )
 
             print(
-                f"[RUNTIME] RTL -> {result}"
-            )
-
-            return
-
-        # ====================================================
-        # STOP MISSION
-        # ====================================================
-
-        if command == "stop_mission":
-
-            result = (
-                self.drone.stop_mission()
-            )
-
-            print(
-                f"[RUNTIME] STOP MISSION "
-                f"-> {result}"
+                "[RUNTIME] RTL -> "
+                f"{result}"
             )
 
             return
@@ -678,8 +821,25 @@ class SimulationWorker(QThread):
             )
 
             print(
-                f"[RUNTIME] START MISSION "
-                f"-> {result}"
+                "[RUNTIME] START MISSION -> "
+                f"{result}"
+            )
+
+            return
+
+        # ====================================================
+        # STOP MISSION
+        # ====================================================
+
+        if command == "stop_mission":
+
+            result = (
+                self.drone.stop_mission()
+            )
+
+            print(
+                "[RUNTIME] STOP MISSION -> "
+                f"{result}"
             )
 
             return
@@ -689,7 +849,7 @@ class SimulationWorker(QThread):
         # ====================================================
 
         print(
-            f"[RUNTIME] Unknown command: "
+            "[RUNTIME] UNKNOWN COMMAND -> "
             f"{command}"
         )
 
@@ -697,7 +857,13 @@ class SimulationWorker(QThread):
     # RUN
     # ========================================================
 
-    def run(self):
+    def run(
+        self,
+    ):
+
+        if self.running:
+
+            return
 
         self.running = True
 
@@ -705,50 +871,64 @@ class SimulationWorker(QThread):
 
             print()
             print("======================================")
-            print("SIMULATION WORKER START")
+            print("      MAVLINK DRONE SIMULATOR")
             print("======================================")
+            print(
+                "[SIM] Simulation worker starting..."
+            )
+            print()
 
             # ==================================================
             # DRONE CONFIG
             # ==================================================
 
-            latitude = float(
-                self.drone_config.get(
-                    "lat",
+            latitude = self._get_float(
+                self.drone_config,
+                "lat",
+                self.mavlink_config.get(
+                    "home_lat",
                     10.8231000,
-                )
+                ),
             )
 
-            longitude = float(
-                self.drone_config.get(
-                    "lon",
+            longitude = self._get_float(
+                self.drone_config,
+                "lon",
+                self.mavlink_config.get(
+                    "home_lon",
                     106.6297000,
-                )
+                ),
             )
 
-            altitude = float(
-                self.drone_config.get(
-                    "alt",
+            altitude = self._get_float(
+                self.drone_config,
+                "alt",
+                self.mavlink_config.get(
+                    "home_alt",
                     0.0,
-                )
+                ),
             )
 
             print(
-                f"[SIM] LAT={latitude}"
+                f"[SIM] Home latitude  : "
+                f"{latitude:.7f}"
             )
 
             print(
-                f"[SIM] LON={longitude}"
+                f"[SIM] Home longitude : "
+                f"{longitude:.7f}"
             )
 
             print(
-                f"[SIM] ALT={altitude}"
+                f"[SIM] Home altitude  : "
+                f"{altitude:.2f} m"
             )
 
             # ==================================================
             # CREATE DRONE
             # ==================================================
 
+            print()
             print(
                 "[SIM] Creating Drone..."
             )
@@ -764,7 +944,7 @@ class SimulationWorker(QThread):
             )
 
             # ==================================================
-            # CONTROLLER
+            # FLIGHT CONTROLLER
             # ==================================================
 
             print(
@@ -783,77 +963,139 @@ class SimulationWorker(QThread):
             # MAVLINK CONFIG
             # ==================================================
 
-            connection_string = (
-                self.mavlink_config.get(
-                    "connection_string",
-                    "udp:0.0.0.0:14550",
-                )
+            system_id = self._get_int(
+                self.mavlink_config,
+                "system_id",
+                1,
             )
 
-            system_id = int(
-                self.mavlink_config.get(
-                    "system_id",
-                    1,
-                )
+            component_id = self._get_int(
+                self.mavlink_config,
+                "component_id",
+                1,
             )
 
-            component_id = int(
+            # --------------------------------------------------
+            # TX
+            # --------------------------------------------------
+
+            tx_host = str(
                 self.mavlink_config.get(
-                    "component_id",
-                    1,
+                    "tx_host",
+                    "127.0.0.1",
                 )
+            ).strip()
+
+            tx_port = self._get_int(
+                self.mavlink_config,
+                "tx_port",
+                14550,
             )
 
-            telemetry_rate = float(
+            # --------------------------------------------------
+            # RX
+            # --------------------------------------------------
+
+            rx_host = str(
+                self.mavlink_config.get(
+                    "rx_host",
+                    "0.0.0.0",
+                )
+            ).strip()
+
+            rx_port = self._get_int(
+                self.mavlink_config,
+                "rx_port",
+                14551,
+            )
+
+            # --------------------------------------------------
+            # Telemetry rate compatibility
+            # --------------------------------------------------
+
+            telemetry_rate = self._get_float(
+                self.mavlink_config,
+                "telemetry_rate_hz",
                 self.mavlink_config.get(
                     "telemetry_rate",
                     20.0,
-                )
+                ),
             )
 
-            print(
-                f"[SIM] MAVLink: "
-                f"{connection_string}"
-            )
+            if telemetry_rate <= 0.0:
+
+                telemetry_rate = 20.0
+
+            # ==================================================
+            # MAVLINK CONFIG PRINT
+            # ==================================================
+
+            print()
+            print("======================================")
+            print("          MAVLINK CONFIG")
+            print("======================================")
 
             print(
-                f"[SIM] System ID: "
+                f"[MAVLINK] System ID     : "
                 f"{system_id}"
             )
 
             print(
-                f"[SIM] Component ID: "
+                f"[MAVLINK] Component ID  : "
                 f"{component_id}"
             )
 
             print(
-                f"[SIM] Telemetry Rate: "
-                f"{telemetry_rate} Hz"
+                f"[MAVLINK] TX -> GCS     : "
+                f"{tx_host}:{tx_port}"
             )
 
+            print(
+                f"[MAVLINK] RX <- GCS     : "
+                f"{rx_host}:{rx_port}"
+            )
+
+            print(
+                f"[MAVLINK] Config rate   : "
+                f"{telemetry_rate:.2f} Hz"
+            )
+
+            print("======================================")
+            print()
+
             # ==================================================
-            # MAVLINK
+            # MAVLINK CONNECTION
             # ==================================================
 
             print(
                 "[SIM] Creating MAVLink connection..."
             )
 
+            connection_string = (
+                f"udp:{tx_host}:{tx_port}"
+            )
+
             self.mavlink = MAVLinkConnection(
                 connection_string=connection_string,
                 source_system=system_id,
                 source_component=component_id,
+                rx_host=rx_host,
+                rx_port=rx_port,
             )
 
             self.mavlink.connect()
 
             print(
-                "[SIM] MAVLink OK"
+                "[SIM] MAVLink connection OK"
             )
 
             # ==================================================
             # MISSION RECEIVER
             # ==================================================
+
+            print(
+                "[SIM] Creating MissionReceiver..."
+            )
 
             self.mission_receiver = MissionReceiver(
                 connection=self.mavlink,
@@ -870,6 +1112,10 @@ class SimulationWorker(QThread):
             # COMMAND RECEIVER
             # ==================================================
 
+            print(
+                "[SIM] Creating CommandReceiver..."
+            )
+
             self.command_receiver = CommandReceiver(
                 connection=self.mavlink,
                 controller=self.controller,
@@ -884,6 +1130,10 @@ class SimulationWorker(QThread):
             # TELEMETRY
             # ==================================================
 
+            print(
+                "[SIM] Creating MAVLinkTelemetry..."
+            )
+
             self.telemetry = MAVLinkTelemetry(
                 drone=self.drone,
                 connection=self.mavlink,
@@ -892,18 +1142,20 @@ class SimulationWorker(QThread):
             )
 
             print(
-                "[SIM] Telemetry OK"
+                "[SIM] MAVLinkTelemetry OK"
             )
 
             # ==================================================
-            # INITIAL RUNTIME VALUES
+            # INITIAL RUNTIME STATUS
             # ==================================================
 
             self.runtime_mode = (
                 self.drone.get_mode()
             )
 
-            self.runtime_altitude = altitude
+            self.runtime_altitude = (
+                altitude
+            )
 
             self.runtime_speed = 0.0
 
@@ -915,9 +1167,13 @@ class SimulationWorker(QThread):
                 )
             )
 
-            self.runtime_latitude = latitude
+            self.runtime_latitude = (
+                latitude
+            )
 
-            self.runtime_longitude = longitude
+            self.runtime_longitude = (
+                longitude
+            )
 
             self.runtime_roll = 0.0
 
@@ -931,21 +1187,64 @@ class SimulationWorker(QThread):
             # READY
             # ==================================================
 
+            print()
+            print("======================================")
+            print("        SIMULATOR READY")
+            print("======================================")
+
             print(
-                "[SIM] Waiting for GCS..."
+                f"[SIM] Drone SYSID      : "
+                f"{system_id}"
             )
 
-            self.status_changed.emit(
-                "READY"
+            print(
+                f"[SIM] Drone COMPID     : "
+                f"{component_id}"
             )
+
+            print(
+                f"[SIM] MAVLink TX       : "
+                f"{tx_host}:{tx_port}"
+            )
+
+            print(
+                f"[SIM] MAVLink RX       : "
+                f"{rx_host}:{rx_port}"
+            )
+
+            print(
+                "[SIM] Waiting for "
+                "Ground Station..."
+            )
+
+            print(
+                "[SIM] Runtime control enabled"
+            )
+
+            print(
+                "======================================"
+            )
+            print()
+
+            self.status_changed.emit(
+                "RUNNING"
+            )
+
+            # ==================================================
+            # SIMULATION CLOCK
+            # ==================================================
+
+            last_time = time.monotonic()
 
             # ==================================================
             # SIMULATION LOOP
             # ==================================================
 
-            last_time = time.monotonic()
-
             while self.running:
+
+                # ------------------------------------------------
+                # DELTA TIME
+                # ------------------------------------------------
 
                 now = time.monotonic()
 
@@ -955,13 +1254,13 @@ class SimulationWorker(QThread):
 
                 last_time = now
 
-                dt = max(
-                    0.0,
-                    min(
-                        dt,
-                        0.1,
-                    ),
-                )
+                if dt < 0.0:
+
+                    dt = 0.0
+
+                elif dt > 0.1:
+
+                    dt = 0.1
 
                 # ==================================================
                 # RUNTIME COMMANDS
@@ -973,79 +1272,86 @@ class SimulationWorker(QThread):
                 # MAVLINK RX
                 # ==================================================
 
-                while self.running:
+                self._process_mavlink_messages()
 
-                    message = self.mavlink.receive(
-                        blocking=False
-                    )
+                # ==================================================
+                # DRONE PHYSICS
+                # ==================================================
 
-                    if message is None:
+                if (
+                    self.drone is not None
+                    and self.running
+                ):
 
-                        break
+                    try:
 
-                    message_type = (
-                        message.get_type()
-                    )
-
-                    print(
-                        f"[MAVLINK RX] "
-                        f"{message_type}"
-                    )
-
-                    # ------------------------------------------------
-                    # Mission
-                    # ------------------------------------------------
-
-                    if self.mission_receiver is not None:
-
-                        self.mission_receiver.process(
-                            message
+                        self.drone.update(
+                            dt
                         )
 
-                    # ------------------------------------------------
-                    # Commands
-                    # ------------------------------------------------
+                    except Exception as exc:
 
-                    if self.command_receiver is not None:
-
-                        self.command_receiver.process(
-                            message
+                        print(
+                            "[DRONE UPDATE ERROR] "
+                            f"{type(exc).__name__}: "
+                            f"{exc}"
                         )
 
                 # ==================================================
-                # DRONE UPDATE
+                # MAVLINK TELEMETRY
                 # ==================================================
 
-                if self.drone is not None:
+                if (
+                    self.telemetry is not None
+                    and self.running
+                ):
 
-                    self.drone.update(
-                        dt
-                    )
+                    try:
 
-                # ==================================================
-                # TELEMETRY
-                # ==================================================
+                        self.telemetry.update()
 
-                if self.telemetry is not None:
+                    except Exception as exc:
 
-                    self.telemetry.update()
-
-                # ==================================================
-                # GUI
-                # ==================================================
-
-                if self.drone is not None:
-
-                    status = (
-                        self.drone.get_status()
-                    )
-
-                    self.telemetry_updated.emit(
-                        status
-                    )
+                        print(
+                            "[TELEMETRY UPDATE ERROR] "
+                            f"{type(exc).__name__}: "
+                            f"{exc}"
+                        )
 
                 # ==================================================
-                # LOOP
+                # GUI TELEMETRY
+                # ==================================================
+
+                if (
+                    self.drone is not None
+                    and self.running
+                ):
+
+                    try:
+
+                        status = (
+                            self.drone.get_status()
+                        )
+
+                        if isinstance(
+                            status,
+                            dict,
+                        ):
+
+                            self.telemetry_updated.emit(
+                                status
+                            )
+
+                    except Exception as exc:
+
+                        print(
+                            "[GUI TELEMETRY ERROR] "
+                            f"{type(exc).__name__}: "
+                            f"{exc}"
+                        )
+
+                # ==================================================
+                # SIMULATION LOOP
                 # ==================================================
 
                 time.sleep(
@@ -1054,7 +1360,7 @@ class SimulationWorker(QThread):
 
         except Exception as exc:
 
-            message = (
+            error_message = (
                 f"{type(exc).__name__}: {exc}"
             )
 
@@ -1062,43 +1368,287 @@ class SimulationWorker(QThread):
             print(
                 "======================================"
             )
+
             print(
-                "[SIMULATION ERROR]"
+                "       SIMULATION ERROR"
             )
+
             print(
-                message
+                "======================================"
             )
+
+            print(
+                error_message
+            )
+
             print(
                 "======================================"
             )
 
             traceback.print_exc()
 
-            self.error_occurred.emit(
-                message
-            )
+            try:
+
+                self.error_occurred.emit(
+                    error_message
+                )
+
+                self.status_changed.emit(
+                    "ERROR"
+                )
+
+            except Exception:
+
+                pass
 
         finally:
 
             self._cleanup()
 
     # ========================================================
+    # MAVLINK RX
+    # ========================================================
+
+    def _process_mavlink_messages(
+        self,
+    ):
+
+        if not self.running:
+
+            return
+
+        if self.mavlink is None:
+
+            return
+
+        # ----------------------------------------------------
+        # Limit messages per cycle so a GCS flood cannot
+        # block physics.
+        # ----------------------------------------------------
+
+        max_messages = 100
+
+        processed = 0
+
+        while (
+            self.running
+            and
+            processed < max_messages
+        ):
+
+            try:
+
+                message = (
+                    self.mavlink.receive(
+                        blocking=False
+                    )
+                )
+
+            except Exception as exc:
+
+                print(
+                    "[MAVLINK RX ERROR] "
+                    f"{type(exc).__name__}: "
+                    f"{exc}"
+                )
+
+                break
+
+            if message is None:
+
+                break
+
+            processed += 1
+
+            try:
+
+                message_type = (
+                    message.get_type()
+                )
+
+            except Exception:
+
+                message_type = "UNKNOWN"
+
+            # ------------------------------------------------
+            # Ignore parser garbage.
+            # ------------------------------------------------
+
+            if message_type in (
+                "BAD_DATA",
+                "UNKNOWN",
+            ):
+
+                continue
+
+            print(
+                f"[MAVLINK RX] "
+                f"{message_type}"
+            )
+
+            # =================================================
+            # MISSION
+            # =================================================
+
+            if (
+                self.mission_receiver
+                is not None
+            ):
+
+                try:
+
+                    self.mission_receiver.process(
+                        message
+                    )
+
+                except Exception as exc:
+
+                    print(
+                        "[MISSION RX ERROR] "
+                        f"{type(exc).__name__}: "
+                        f"{exc}"
+                    )
+
+            # =================================================
+            # COMMAND
+            # =================================================
+
+            if (
+                self.command_receiver
+                is not None
+            ):
+
+                try:
+
+                    self.command_receiver.process(
+                        message
+                    )
+
+                except Exception as exc:
+
+                    print(
+                        "[COMMAND RX ERROR] "
+                        f"{type(exc).__name__}: "
+                        f"{exc}"
+                    )
+
+    # ========================================================
+    # CONFIG HELPERS
+    # ========================================================
+
+    @staticmethod
+    def _get_int(
+        config,
+        key,
+        default,
+    ):
+
+        try:
+
+            return int(
+                config.get(
+                    key,
+                    default,
+                )
+            )
+
+        except (
+            TypeError,
+            ValueError,
+        ):
+
+            return int(
+                default
+            )
+
+    # ========================================================
+
+    @staticmethod
+    def _get_float(
+        config,
+        key,
+        default,
+    ):
+
+        try:
+
+            return float(
+                config.get(
+                    key,
+                    default,
+                )
+            )
+
+        except (
+            TypeError,
+            ValueError,
+        ):
+
+            return float(
+                default
+            )
+
+    # ========================================================
     # STOP
     # ========================================================
 
-    def stop(self):
+    def stop(
+        self,
+    ):
+
+        if not self.running:
+
+            return
+
+        print(
+            "[SIM] Stop requested"
+        )
 
         self.running = False
+
+    # ========================================================
+    # CLEAR COMMAND QUEUE
+    # ========================================================
+
+    def _clear_command_queue(
+        self,
+    ):
+
+        while True:
+
+            try:
+
+                self.command_queue.get_nowait()
+
+                self.command_queue.task_done()
+
+            except queue.Empty:
+
+                break
 
     # ========================================================
     # CLEANUP
     # ========================================================
 
-    def _cleanup(self):
+    def _cleanup(
+        self,
+    ):
 
         self.running = False
 
-        self.command_queue.clear()
+        print(
+            "[SIM] Cleaning up..."
+        )
+
+        # ====================================================
+        # RUNTIME QUEUE
+        # ====================================================
+
+        self._clear_command_queue()
+
+        # ====================================================
+        # MAVLINK
+        # ====================================================
 
         if self.mavlink is not None:
 
@@ -1109,11 +1659,14 @@ class SimulationWorker(QThread):
             except Exception as exc:
 
                 print(
-                    f"[MAVLINK CLOSE ERROR] "
+                    "[MAVLINK CLOSE ERROR] "
+                    f"{type(exc).__name__}: "
                     f"{exc}"
                 )
 
-            self.mavlink = None
+        # ====================================================
+        # RELEASE OBJECTS
+        # ====================================================
 
         self.telemetry = None
 
@@ -1121,14 +1674,46 @@ class SimulationWorker(QThread):
 
         self.mission_receiver = None
 
+        self.mavlink = None
+
         self.controller = None
 
         self.drone = None
+
+        # ====================================================
+        # RUNTIME VALUES
+        # ====================================================
+
+        self.runtime_mode = None
+
+        self.runtime_altitude = None
+
+        self.runtime_speed = None
+
+        self.runtime_heading = None
+
+        self.runtime_latitude = None
+
+        self.runtime_longitude = None
+
+        self.runtime_roll = None
+
+        self.runtime_pitch = None
+
+        self.runtime_yaw = None
+
+        self.runtime_battery = None
 
         print(
             "[SIM] Worker finished"
         )
 
-        self.status_changed.emit(
-            "STOPPED"
-        )
+        try:
+
+            self.status_changed.emit(
+                "STOPPED"
+            )
+
+        except Exception:
+
+            pass
