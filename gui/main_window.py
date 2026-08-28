@@ -1,5 +1,6 @@
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QObject, QEvent, Qt
 from PySide6.QtWidgets import (
+    QApplication,
     QMainWindow,
     QWidget,
     QVBoxLayout,
@@ -14,6 +15,7 @@ from PySide6.QtWidgets import (
     QSlider,
     QGroupBox,
     QScrollArea,
+    QAbstractSpinBox,
 )
 
 from gui.simulation_worker import SimulationWorker
@@ -21,15 +23,131 @@ from gui.drone_config_panel import DroneConfigPanel
 from gui.mavlink_config_panel import MAVLinkConfigPanel
 
 
+# ============================================================
+# GLOBAL MOUSE WHEEL FILTER
+# ============================================================
+
+class NoSpinBoxWheelFilter(QObject):
+    """
+    Disable mouse wheel changes for every QSpinBox /
+    QDoubleSpinBox in the entire application.
+
+    This also handles the internal QLineEdit and child
+    widgets belonging to a SpinBox.
+    """
+
+    def eventFilter(
+        self,
+        watched,
+        event,
+    ):
+
+        # ----------------------------------------------------
+        # Only process Wheel events.
+        # ----------------------------------------------------
+
+        if event.type() != QEvent.Type.Wheel:
+
+            return False
+
+        # ----------------------------------------------------
+        # Start from the widget receiving the event.
+        # ----------------------------------------------------
+
+        current = watched
+
+        # ----------------------------------------------------
+        # Walk through the parent hierarchy.
+        #
+        # Example:
+        #
+        # QLineEdit
+        #    ↓
+        # QDoubleSpinBox
+        #    ↓
+        # QWidget
+        #
+        # If any parent is a SpinBox, block the wheel.
+        # ----------------------------------------------------
+
+        while current is not None:
+
+            if isinstance(
+                current,
+                QAbstractSpinBox,
+            ):
+
+                event.accept()
+
+                return True
+
+            try:
+
+                current = current.parent()
+
+            except Exception:
+
+                break
+
+        return False
+
+
+# ============================================================
+# CUSTOM DOUBLE SPINBOX
+# ============================================================
+
+class NoWheelDoubleSpinBox(QDoubleSpinBox):
+    """
+    Local protection for QDoubleSpinBox.
+    """
+
+    def wheelEvent(
+        self,
+        event,
+    ):
+
+        event.accept()
+
+        return
+
+
+# ============================================================
+# CUSTOM SPINBOX
+# ============================================================
+
+class NoWheelSpinBox(QSpinBox):
+    """
+    Local protection for QSpinBox.
+    """
+
+    def wheelEvent(
+        self,
+        event,
+    ):
+
+        event.accept()
+
+        return
+
+
+# ============================================================
+# MAIN WINDOW
+# ============================================================
+
 class MainWindow(QMainWindow):
 
     # ========================================================
     # INIT
     # ========================================================
 
-    def __init__(self):
+    def __init__(
+        self,
+        parent=None,
+    ):
 
-        super().__init__()
+        super().__init__(
+            parent
+        )
 
         # ====================================================
         # WINDOW
@@ -49,6 +167,26 @@ class MainWindow(QMainWindow):
         # ====================================================
 
         self.worker = None
+
+        # ====================================================
+        # GLOBAL WHEEL FILTER
+        # ====================================================
+
+        self._wheel_filter = None
+
+        app = QApplication.instance()
+
+        if app is not None:
+
+            self._wheel_filter = (
+                NoSpinBoxWheelFilter(
+                    app
+                )
+            )
+
+            app.installEventFilter(
+                self._wheel_filter
+            )
 
         # ====================================================
         # UI
@@ -110,7 +248,7 @@ class MainWindow(QMainWindow):
         )
 
         # ====================================================
-        # SCROLL
+        # SCROLL AREA
         # ====================================================
 
         scroll = QScrollArea()
@@ -146,7 +284,7 @@ class MainWindow(QMainWindow):
         )
 
         # ====================================================
-        # INITIAL CONFIG
+        # INITIAL DRONE CONFIG
         # ====================================================
 
         self.drone_config_panel = (
@@ -156,6 +294,10 @@ class MainWindow(QMainWindow):
         content_layout.addWidget(
             self.drone_config_panel
         )
+
+        # ====================================================
+        # MAVLINK CONFIG
+        # ====================================================
 
         self.mavlink_config_panel = (
             MAVLinkConfigPanel()
@@ -181,10 +323,6 @@ class MainWindow(QMainWindow):
             content_layout
         )
 
-        # ====================================================
-        # STRETCH
-        # ====================================================
-
         content_layout.addStretch()
 
     # ========================================================
@@ -206,10 +344,6 @@ class MainWindow(QMainWindow):
             frame
         )
 
-        # ====================================================
-        # TITLE
-        # ====================================================
-
         title = QLabel(
             "SIMULATION STATUS"
         )
@@ -226,10 +360,6 @@ class MainWindow(QMainWindow):
         layout.addWidget(
             title
         )
-
-        # ====================================================
-        # STATUS
-        # ====================================================
 
         self.status_label = QLabel(
             "Status: STOPPED"
@@ -252,10 +382,6 @@ class MainWindow(QMainWindow):
         layout.addWidget(
             self.status_label
         )
-
-        # ====================================================
-        # MAVLINK
-        # ====================================================
 
         self.mavlink_label = QLabel(
             "MAVLink: DISCONNECTED"
@@ -329,7 +455,7 @@ class MainWindow(QMainWindow):
         )
 
     # ========================================================
-    # LIVE CONTROL
+    # LIVE CONTROL PANEL
     # ========================================================
 
     def _create_live_control_panel(
@@ -398,7 +524,7 @@ class MainWindow(QMainWindow):
         )
 
         self.altitude_spin = (
-            QDoubleSpinBox()
+            NoWheelDoubleSpinBox()
         )
 
         self.altitude_spin.setRange(
@@ -427,12 +553,20 @@ class MainWindow(QMainWindow):
             100000,
         )
 
-        self.altitude_slider.setSingleStep(
-            100
-        )
-
         self.altitude_button = QPushButton(
             "APPLY"
+        )
+
+        self.altitude_button.clicked.connect(
+            self.apply_altitude
+        )
+
+        self.altitude_slider.valueChanged.connect(
+            self.on_altitude_slider_changed
+        )
+
+        self.altitude_spin.valueChanged.connect(
+            self.on_altitude_spin_changed
         )
 
         layout.addWidget(
@@ -457,18 +591,6 @@ class MainWindow(QMainWindow):
             3,
         )
 
-        self.altitude_button.clicked.connect(
-            self.apply_altitude
-        )
-
-        self.altitude_slider.valueChanged.connect(
-            self.on_altitude_slider_changed
-        )
-
-        self.altitude_spin.valueChanged.connect(
-            self.on_altitude_spin_changed
-        )
-
         row += 1
 
         # ====================================================
@@ -482,7 +604,7 @@ class MainWindow(QMainWindow):
         )
 
         self.speed_spin = (
-            QDoubleSpinBox()
+            NoWheelDoubleSpinBox()
         )
 
         self.speed_spin.setRange(
@@ -511,12 +633,20 @@ class MainWindow(QMainWindow):
             10000,
         )
 
-        self.speed_slider.setSingleStep(
-            10
-        )
-
         self.speed_button = QPushButton(
             "APPLY"
+        )
+
+        self.speed_button.clicked.connect(
+            self.apply_speed
+        )
+
+        self.speed_slider.valueChanged.connect(
+            self.on_speed_slider_changed
+        )
+
+        self.speed_spin.valueChanged.connect(
+            self.on_speed_spin_changed
         )
 
         layout.addWidget(
@@ -541,18 +671,6 @@ class MainWindow(QMainWindow):
             3,
         )
 
-        self.speed_button.clicked.connect(
-            self.apply_speed
-        )
-
-        self.speed_slider.valueChanged.connect(
-            self.on_speed_slider_changed
-        )
-
-        self.speed_spin.valueChanged.connect(
-            self.on_speed_spin_changed
-        )
-
         row += 1
 
         # ====================================================
@@ -566,7 +684,7 @@ class MainWindow(QMainWindow):
         )
 
         self.heading_spin = (
-            QDoubleSpinBox()
+            NoWheelDoubleSpinBox()
         )
 
         self.heading_spin.setRange(
@@ -595,12 +713,20 @@ class MainWindow(QMainWindow):
             36000,
         )
 
-        self.heading_slider.setSingleStep(
-            100
-        )
-
         self.heading_button = QPushButton(
             "APPLY"
+        )
+
+        self.heading_button.clicked.connect(
+            self.apply_heading
+        )
+
+        self.heading_slider.valueChanged.connect(
+            self.on_heading_slider_changed
+        )
+
+        self.heading_spin.valueChanged.connect(
+            self.on_heading_spin_changed
         )
 
         layout.addWidget(
@@ -625,18 +751,6 @@ class MainWindow(QMainWindow):
             3,
         )
 
-        self.heading_button.clicked.connect(
-            self.apply_heading
-        )
-
-        self.heading_slider.valueChanged.connect(
-            self.on_heading_slider_changed
-        )
-
-        self.heading_spin.valueChanged.connect(
-            self.on_heading_spin_changed
-        )
-
         row += 1
 
         # ====================================================
@@ -650,7 +764,7 @@ class MainWindow(QMainWindow):
         )
 
         self.latitude_spin = (
-            QDoubleSpinBox()
+            NoWheelDoubleSpinBox()
         )
 
         self.latitude_spin.setRange(
@@ -670,6 +784,10 @@ class MainWindow(QMainWindow):
             "APPLY"
         )
 
+        self.latitude_button.clicked.connect(
+            self.apply_latitude
+        )
+
         layout.addWidget(
             self.latitude_spin,
             row,
@@ -680,10 +798,6 @@ class MainWindow(QMainWindow):
             self.latitude_button,
             row,
             2,
-        )
-
-        self.latitude_button.clicked.connect(
-            self.apply_latitude
         )
 
         row += 1
@@ -699,7 +813,7 @@ class MainWindow(QMainWindow):
         )
 
         self.longitude_spin = (
-            QDoubleSpinBox()
+            NoWheelDoubleSpinBox()
         )
 
         self.longitude_spin.setRange(
@@ -719,6 +833,10 @@ class MainWindow(QMainWindow):
             "APPLY"
         )
 
+        self.longitude_button.clicked.connect(
+            self.apply_longitude
+        )
+
         layout.addWidget(
             self.longitude_spin,
             row,
@@ -729,10 +847,6 @@ class MainWindow(QMainWindow):
             self.longitude_button,
             row,
             2,
-        )
-
-        self.longitude_button.clicked.connect(
-            self.apply_longitude
         )
 
         row += 1
@@ -748,7 +862,7 @@ class MainWindow(QMainWindow):
         )
 
         self.roll_spin = (
-            QDoubleSpinBox()
+            NoWheelDoubleSpinBox()
         )
 
         self.roll_spin.setRange(
@@ -789,7 +903,7 @@ class MainWindow(QMainWindow):
         )
 
         self.pitch_spin = (
-            QDoubleSpinBox()
+            NoWheelDoubleSpinBox()
         )
 
         self.pitch_spin.setRange(
@@ -830,7 +944,7 @@ class MainWindow(QMainWindow):
         )
 
         self.yaw_spin = (
-            QDoubleSpinBox()
+            NoWheelDoubleSpinBox()
         )
 
         self.yaw_spin.setRange(
@@ -871,7 +985,7 @@ class MainWindow(QMainWindow):
         )
 
         self.battery_spin = (
-            QDoubleSpinBox()
+            NoWheelDoubleSpinBox()
         )
 
         self.battery_spin.setRange(
@@ -919,7 +1033,9 @@ class MainWindow(QMainWindow):
             0,
         )
 
-        self.gps_fix_spin = QSpinBox()
+        self.gps_fix_spin = (
+            NoWheelSpinBox()
+        )
 
         self.gps_fix_spin.setRange(
             0,
@@ -948,7 +1064,9 @@ class MainWindow(QMainWindow):
             0,
         )
 
-        self.satellites_spin = QSpinBox()
+        self.satellites_spin = (
+            NoWheelSpinBox()
+        )
 
         self.satellites_spin.setRange(
             0,
@@ -959,18 +1077,18 @@ class MainWindow(QMainWindow):
             12
         )
 
-        layout.addWidget(
-            self.satellites_spin,
-            row,
-            1,
-        )
-
         self.gps_button = QPushButton(
             "APPLY GPS"
         )
 
         self.gps_button.clicked.connect(
             self.apply_gps
+        )
+
+        layout.addWidget(
+            self.satellites_spin,
+            row,
+            1,
         )
 
         layout.addWidget(
@@ -992,7 +1110,7 @@ class MainWindow(QMainWindow):
         )
 
         self.hdop_spin = (
-            QDoubleSpinBox()
+            NoWheelDoubleSpinBox()
         )
 
         self.hdop_spin.setRange(
@@ -1027,7 +1145,7 @@ class MainWindow(QMainWindow):
         )
 
         self.vdop_spin = (
-            QDoubleSpinBox()
+            NoWheelDoubleSpinBox()
         )
 
         self.vdop_spin.setRange(
@@ -1049,13 +1167,13 @@ class MainWindow(QMainWindow):
             1,
         )
 
+        row += 1
+
         # ====================================================
         # ACTION BUTTONS
         # ====================================================
 
-        row += 1
-
-        action_layout = QHBoxLayout()
+        actions = QHBoxLayout()
 
         self.arm_button = QPushButton(
             "ARM"
@@ -1097,37 +1215,33 @@ class MainWindow(QMainWindow):
             self.rtl_drone
         )
 
-        action_layout.addWidget(
+        actions.addWidget(
             self.arm_button
         )
 
-        action_layout.addWidget(
+        actions.addWidget(
             self.disarm_button
         )
 
-        action_layout.addWidget(
+        actions.addWidget(
             self.takeoff_button
         )
 
-        action_layout.addWidget(
+        actions.addWidget(
             self.land_button
         )
 
-        action_layout.addWidget(
+        actions.addWidget(
             self.rtl_button
         )
 
         layout.addLayout(
-            action_layout,
+            actions,
             row,
             0,
             1,
             3,
         )
-
-        # ====================================================
-        # INITIAL DISABLED STATE
-        # ====================================================
 
         self.live_frame.setEnabled(
             False
@@ -1154,61 +1268,20 @@ class MainWindow(QMainWindow):
             frame
         )
 
-        self.telemetry_mode = QLabel(
-            "--"
-        )
-
-        self.telemetry_arm = QLabel(
-            "--"
-        )
-
-        self.telemetry_lat = QLabel(
-            "--"
-        )
-
-        self.telemetry_lon = QLabel(
-            "--"
-        )
-
-        self.telemetry_alt = QLabel(
-            "--"
-        )
-
-        self.telemetry_speed = QLabel(
-            "--"
-        )
-
-        self.telemetry_heading = QLabel(
-            "--"
-        )
-
-        self.telemetry_roll = QLabel(
-            "--"
-        )
-
-        self.telemetry_pitch = QLabel(
-            "--"
-        )
-
-        self.telemetry_yaw = QLabel(
-            "--"
-        )
-
-        self.telemetry_battery = QLabel(
-            "--"
-        )
-
-        self.telemetry_wp = QLabel(
-            "--"
-        )
-
-        self.telemetry_distance = QLabel(
-            "--"
-        )
-
-        self.telemetry_alt_error = QLabel(
-            "--"
-        )
+        self.telemetry_mode = QLabel("--")
+        self.telemetry_arm = QLabel("--")
+        self.telemetry_lat = QLabel("--")
+        self.telemetry_lon = QLabel("--")
+        self.telemetry_alt = QLabel("--")
+        self.telemetry_speed = QLabel("--")
+        self.telemetry_heading = QLabel("--")
+        self.telemetry_roll = QLabel("--")
+        self.telemetry_pitch = QLabel("--")
+        self.telemetry_yaw = QLabel("--")
+        self.telemetry_battery = QLabel("--")
+        self.telemetry_wp = QLabel("--")
+        self.telemetry_distance = QLabel("--")
+        self.telemetry_alt_error = QLabel("--")
 
         values = [
 
@@ -1239,22 +1312,22 @@ class MainWindow(QMainWindow):
             widget,
         ) in enumerate(values):
 
-            r = index // 2
+            row = index // 2
 
-            c = (
+            column = (
                 index % 2
             ) * 2
 
             layout.addWidget(
                 QLabel(name),
-                r,
-                c,
+                row,
+                column,
             )
 
             layout.addWidget(
                 widget,
-                r,
-                c + 1,
+                row,
+                column + 1,
             )
 
         parent_layout.addWidget(
@@ -1262,16 +1335,12 @@ class MainWindow(QMainWindow):
         )
 
     # ========================================================
-    # START SIMULATION
+    # START
     # ========================================================
 
     def start_simulation(
         self,
     ):
-
-        # ----------------------------------------------------
-        # Prevent duplicate worker
-        # ----------------------------------------------------
 
         if self.worker is not None:
 
@@ -1280,7 +1349,7 @@ class MainWindow(QMainWindow):
                 return
 
         # ----------------------------------------------------
-        # Read initial configuration
+        # Drone configuration
         # ----------------------------------------------------
 
         try:
@@ -1289,7 +1358,12 @@ class MainWindow(QMainWindow):
                 self.drone_config_panel.get_config()
             )
 
-        except Exception:
+        except Exception as exc:
+
+            print(
+                "[GUI] Drone config error:",
+                exc,
+            )
 
             drone_config = {
                 "lat": 10.8231000,
@@ -1297,28 +1371,33 @@ class MainWindow(QMainWindow):
                 "alt": 0.0,
             }
 
+        # ----------------------------------------------------
+        # MAVLink configuration
+        # ----------------------------------------------------
+
         try:
 
             mavlink_config = (
                 self.mavlink_config_panel.get_config()
             )
 
-        except Exception:
+        except Exception as exc:
+
+            print(
+                "[GUI] MAVLink config error:",
+                exc,
+            )
 
             mavlink_config = {
                 "connection_string":
                     "udp:0.0.0.0:14550",
-
-                "system_id":
-                    1,
-
-                "component_id":
-                    1,
+                "system_id": 1,
+                "component_id": 1,
             }
 
-        # ----------------------------------------------------
-        # Create worker
-        # ----------------------------------------------------
+        # ====================================================
+        # CREATE WORKER
+        # ====================================================
 
         self.worker = SimulationWorker(
             drone_config=drone_config,
@@ -1326,9 +1405,9 @@ class MainWindow(QMainWindow):
             parent=self,
         )
 
-        # ----------------------------------------------------
-        # Signals
-        # ----------------------------------------------------
+        # ====================================================
+        # SIGNALS
+        # ====================================================
 
         self.worker.telemetry_updated.connect(
             self.on_telemetry_updated
@@ -1346,9 +1425,9 @@ class MainWindow(QMainWindow):
             self.on_worker_finished
         )
 
-        # ----------------------------------------------------
+        # ====================================================
         # UI
-        # ----------------------------------------------------
+        # ====================================================
 
         self.status_label.setText(
             "Status: STARTING..."
@@ -1370,14 +1449,14 @@ class MainWindow(QMainWindow):
             False
         )
 
-        # ----------------------------------------------------
-        # Start
-        # ----------------------------------------------------
+        # ====================================================
+        # START
+        # ====================================================
 
         self.worker.start()
 
     # ========================================================
-    # STOP SIMULATION
+    # STOP
     # ========================================================
 
     def stop_simulation(
@@ -1489,363 +1568,6 @@ class MainWindow(QMainWindow):
             )
 
     # ========================================================
-    # TELEMETRY
-    # ========================================================
-
-    def on_telemetry_updated(
-        self,
-        status,
-    ):
-
-        if not isinstance(
-            status,
-            dict,
-        ):
-
-            return
-
-        # ====================================================
-        # VALUES
-        # ====================================================
-
-        mode = status.get(
-            "flight_mode",
-            status.get(
-                "mode",
-                "FREE",
-            ),
-        )
-
-        armed = status.get(
-            "armed",
-            False,
-        )
-
-        lat = status.get(
-            "lat",
-            0.0,
-        )
-
-        lon = status.get(
-            "lon",
-            0.0,
-        )
-
-        alt = status.get(
-            "alt",
-            0.0,
-        )
-
-        speed = status.get(
-            "ground_speed",
-            0.0,
-        )
-
-        heading = status.get(
-            "heading",
-            0.0,
-        )
-
-        roll = status.get(
-            "roll",
-            0.0,
-        )
-
-        pitch = status.get(
-            "pitch",
-            0.0,
-        )
-
-        yaw = status.get(
-            "yaw",
-            0.0,
-        )
-
-        battery = status.get(
-            "battery",
-            0.0,
-        )
-
-        current_wp = status.get(
-            "current_waypoint",
-            None,
-        )
-
-        mission_count = int(
-            status.get(
-                "mission_count",
-                0,
-            )
-        )
-
-        distance = status.get(
-            "distance_to_target",
-            None,
-        )
-
-        altitude_error = status.get(
-            "altitude_error",
-            None,
-        )
-
-        # ====================================================
-        # DISPLAY
-        # ====================================================
-
-        self.telemetry_mode.setText(
-            str(mode)
-        )
-
-        self.telemetry_arm.setText(
-            str(armed)
-        )
-
-        self.telemetry_lat.setText(
-            self._format_float(
-                lat,
-                7,
-            )
-        )
-
-        self.telemetry_lon.setText(
-            self._format_float(
-                lon,
-                7,
-            )
-        )
-
-        self.telemetry_alt.setText(
-            f"{self._to_float(alt):.2f} m"
-        )
-
-        self.telemetry_speed.setText(
-            f"{self._to_float(speed):.2f} m/s"
-        )
-
-        self.telemetry_heading.setText(
-            f"{self._to_float(heading):.2f}°"
-        )
-
-        self.telemetry_roll.setText(
-            f"{self._to_float(roll):.2f}°"
-        )
-
-        self.telemetry_pitch.setText(
-            f"{self._to_float(pitch):.2f}°"
-        )
-
-        self.telemetry_yaw.setText(
-            f"{self._to_float(yaw):.2f}°"
-        )
-
-        self.telemetry_battery.setText(
-            f"{self._to_float(battery):.1f} %"
-        )
-
-        # ====================================================
-        # WP
-        # ====================================================
-
-        if (
-            current_wp is not None
-            and mission_count > 0
-        ):
-
-            self.telemetry_wp.setText(
-                f"{current_wp} / "
-                f"{mission_count}"
-            )
-
-        else:
-
-            self.telemetry_wp.setText(
-                "--"
-            )
-
-        # ====================================================
-        # DISTANCE
-        # ====================================================
-
-        if distance is None:
-
-            self.telemetry_distance.setText(
-                "--"
-            )
-
-        else:
-
-            self.telemetry_distance.setText(
-                f"{self._to_float(distance):.2f} m"
-            )
-
-        # ====================================================
-        # ALT ERROR
-        # ====================================================
-
-        if altitude_error is None:
-
-            self.telemetry_alt_error.setText(
-                "--"
-            )
-
-        else:
-
-            self.telemetry_alt_error.setText(
-                f"{self._to_float(altitude_error):.2f} m"
-            )
-
-        # ====================================================
-        # SYNC CONTROLS
-        # ====================================================
-
-        self._sync_double_spin(
-            self.altitude_spin,
-            status.get(
-                "target_altitude",
-                None,
-            ),
-        )
-
-        self._sync_double_spin(
-            self.speed_spin,
-            status.get(
-                "target_ground_speed",
-                None,
-            ),
-        )
-
-        self._sync_double_spin(
-            self.heading_spin,
-            status.get(
-                "target_heading",
-                None,
-            ),
-        )
-
-        self._sync_double_spin(
-            self.latitude_spin,
-            lat,
-        )
-
-        self._sync_double_spin(
-            self.longitude_spin,
-            lon,
-        )
-
-        self._sync_double_spin(
-            self.roll_spin,
-            roll,
-        )
-
-        self._sync_double_spin(
-            self.pitch_spin,
-            pitch,
-        )
-
-        self._sync_double_spin(
-            self.yaw_spin,
-            yaw,
-        )
-
-        self._sync_double_spin(
-            self.battery_spin,
-            battery,
-        )
-
-        self._sync_double_spin(
-            self.hdop_spin,
-            status.get(
-                "gps_hdop",
-                None,
-            ),
-        )
-
-        self._sync_double_spin(
-            self.vdop_spin,
-            status.get(
-                "gps_vdop",
-                None,
-            ),
-        )
-
-        self._sync_int_spin(
-            self.gps_fix_spin,
-            status.get(
-                "gps_fix",
-                None,
-            ),
-        )
-
-        self._sync_int_spin(
-            self.satellites_spin,
-            status.get(
-                "satellites",
-                None,
-            ),
-        )
-
-        # ====================================================
-        # SLIDERS
-        # ====================================================
-
-        self._sync_slider(
-            self.altitude_slider,
-            status.get(
-                "target_altitude",
-                None,
-            ),
-            100.0,
-        )
-
-        self._sync_slider(
-            self.speed_slider,
-            status.get(
-                "target_ground_speed",
-                None,
-            ),
-            100.0,
-        )
-
-        self._sync_slider(
-            self.heading_slider,
-            status.get(
-                "target_heading",
-                None,
-            ),
-            100.0,
-        )
-
-        # ====================================================
-        # MODE COMBO
-        # ====================================================
-
-        mode_text = str(
-            mode
-        ).upper()
-
-        index = (
-            self.mode_combo.findText(
-                mode_text
-            )
-        )
-
-        if index >= 0:
-
-            old_block = (
-                self.mode_combo.blockSignals(
-                    True
-                )
-            )
-
-            self.mode_combo.setCurrentIndex(
-                index
-            )
-
-            self.mode_combo.blockSignals(
-                old_block
-            )
-
-    # ========================================================
     # MODE
     # ========================================================
 
@@ -1877,7 +1599,7 @@ class MainWindow(QMainWindow):
             / 100.0
         )
 
-        self._set_double_without_signal(
+        self._set_double_silent(
             self.altitude_spin,
             altitude,
         )
@@ -1896,13 +1618,11 @@ class MainWindow(QMainWindow):
         value,
     ):
 
-        slider_value = int(
-            value * 100.0
-        )
-
-        self._set_slider_without_signal(
+        self._set_slider_silent(
             self.altitude_slider,
-            slider_value,
+            int(
+                value * 100.0
+            ),
         )
 
     # ========================================================
@@ -1919,7 +1639,7 @@ class MainWindow(QMainWindow):
             / 100.0
         )
 
-        self._set_double_without_signal(
+        self._set_double_silent(
             self.speed_spin,
             speed,
         )
@@ -1938,13 +1658,11 @@ class MainWindow(QMainWindow):
         value,
     ):
 
-        slider_value = int(
-            value * 100.0
-        )
-
-        self._set_slider_without_signal(
+        self._set_slider_silent(
             self.speed_slider,
-            slider_value,
+            int(
+                value * 100.0
+            ),
         )
 
     # ========================================================
@@ -1961,7 +1679,7 @@ class MainWindow(QMainWindow):
             / 100.0
         )
 
-        self._set_double_without_signal(
+        self._set_double_silent(
             self.heading_spin,
             heading,
         )
@@ -1980,13 +1698,11 @@ class MainWindow(QMainWindow):
         value,
     ):
 
-        slider_value = int(
-            value * 100.0
-        )
-
-        self._set_slider_without_signal(
+        self._set_slider_silent(
             self.heading_slider,
-            slider_value,
+            int(
+                value * 100.0
+            ),
         )
 
     # ========================================================
@@ -2041,7 +1757,7 @@ class MainWindow(QMainWindow):
         )
 
     # ========================================================
-    # LATITUDE
+    # APPLY LATITUDE
     # ========================================================
 
     def apply_latitude(
@@ -2058,7 +1774,7 @@ class MainWindow(QMainWindow):
         )
 
     # ========================================================
-    # LONGITUDE
+    # APPLY LONGITUDE
     # ========================================================
 
     def apply_longitude(
@@ -2256,21 +1972,338 @@ class MainWindow(QMainWindow):
         )
 
     # ========================================================
-    # WORKER CHECK
+    # TELEMETRY
     # ========================================================
 
-    def _worker_running(
+    def on_telemetry_updated(
         self,
-    ) -> bool:
+        status,
+    ):
 
-        return (
-            self.worker is not None
-            and
-            self.worker.isRunning()
+        if not isinstance(
+            status,
+            dict,
+        ):
+
+            return
+
+        mode = status.get(
+            "flight_mode",
+            status.get(
+                "mode",
+                "FREE",
+            ),
         )
 
+        armed = status.get(
+            "armed",
+            False,
+        )
+
+        lat = status.get(
+            "lat",
+            0.0,
+        )
+
+        lon = status.get(
+            "lon",
+            0.0,
+        )
+
+        alt = status.get(
+            "alt",
+            0.0,
+        )
+
+        speed = status.get(
+            "ground_speed",
+            0.0,
+        )
+
+        heading = status.get(
+            "heading",
+            0.0,
+        )
+
+        roll = status.get(
+            "roll",
+            0.0,
+        )
+
+        pitch = status.get(
+            "pitch",
+            0.0,
+        )
+
+        yaw = status.get(
+            "yaw",
+            0.0,
+        )
+
+        battery = status.get(
+            "battery",
+            0.0,
+        )
+
+        current_wp = status.get(
+            "current_waypoint",
+            None,
+        )
+
+        mission_count = int(
+            status.get(
+                "mission_count",
+                0,
+            )
+        )
+
+        distance = status.get(
+            "distance_to_target",
+            None,
+        )
+
+        altitude_error = status.get(
+            "altitude_error",
+            None,
+        )
+
+        # ----------------------------------------------------
+        # Display
+        # ----------------------------------------------------
+
+        self.telemetry_mode.setText(
+            str(mode)
+        )
+
+        self.telemetry_arm.setText(
+            str(armed)
+        )
+
+        self.telemetry_lat.setText(
+            self._format_float(
+                lat,
+                7,
+            )
+        )
+
+        self.telemetry_lon.setText(
+            self._format_float(
+                lon,
+                7,
+            )
+        )
+
+        self.telemetry_alt.setText(
+            f"{self._to_float(alt):.2f} m"
+        )
+
+        self.telemetry_speed.setText(
+            f"{self._to_float(speed):.2f} m/s"
+        )
+
+        self.telemetry_heading.setText(
+            f"{self._to_float(heading):.2f}°"
+        )
+
+        self.telemetry_roll.setText(
+            f"{self._to_float(roll):.2f}°"
+        )
+
+        self.telemetry_pitch.setText(
+            f"{self._to_float(pitch):.2f}°"
+        )
+
+        self.telemetry_yaw.setText(
+            f"{self._to_float(yaw):.2f}°"
+        )
+
+        self.telemetry_battery.setText(
+            f"{self._to_float(battery):.1f} %"
+        )
+
+        if (
+            current_wp is not None
+            and mission_count > 0
+        ):
+
+            self.telemetry_wp.setText(
+                f"{current_wp} / "
+                f"{mission_count}"
+            )
+
+        else:
+
+            self.telemetry_wp.setText(
+                "--"
+            )
+
+        if distance is None:
+
+            self.telemetry_distance.setText(
+                "--"
+            )
+
+        else:
+
+            self.telemetry_distance.setText(
+                f"{self._to_float(distance):.2f} m"
+            )
+
+        if altitude_error is None:
+
+            self.telemetry_alt_error.setText(
+                "--"
+            )
+
+        else:
+
+            self.telemetry_alt_error.setText(
+                f"{self._to_float(altitude_error):.2f} m"
+            )
+
+        # ----------------------------------------------------
+        # Sync controls without generating commands.
+        # ----------------------------------------------------
+
+        self._sync_double_spin(
+            self.altitude_spin,
+            status.get(
+                "target_altitude"
+            ),
+        )
+
+        self._sync_double_spin(
+            self.speed_spin,
+            status.get(
+                "target_ground_speed"
+            ),
+        )
+
+        self._sync_double_spin(
+            self.heading_spin,
+            status.get(
+                "target_heading"
+            ),
+        )
+
+        self._sync_double_spin(
+            self.latitude_spin,
+            lat,
+        )
+
+        self._sync_double_spin(
+            self.longitude_spin,
+            lon,
+        )
+
+        self._sync_double_spin(
+            self.roll_spin,
+            roll,
+        )
+
+        self._sync_double_spin(
+            self.pitch_spin,
+            pitch,
+        )
+
+        self._sync_double_spin(
+            self.yaw_spin,
+            yaw,
+        )
+
+        self._sync_double_spin(
+            self.battery_spin,
+            battery,
+        )
+
+        self._sync_int_spin(
+            self.gps_fix_spin,
+            status.get(
+                "gps_fix"
+            ),
+        )
+
+        self._sync_int_spin(
+            self.satellites_spin,
+            status.get(
+                "satellites"
+            ),
+        )
+
+        self._sync_double_spin(
+            self.hdop_spin,
+            status.get(
+                "gps_hdop"
+            ),
+        )
+
+        self._sync_double_spin(
+            self.vdop_spin,
+            status.get(
+                "gps_vdop"
+            ),
+        )
+
+        # ----------------------------------------------------
+        # Slider sync
+        # ----------------------------------------------------
+
+        self._sync_slider(
+            self.altitude_slider,
+            status.get(
+                "target_altitude"
+            ),
+            100.0,
+        )
+
+        self._sync_slider(
+            self.speed_slider,
+            status.get(
+                "target_ground_speed"
+            ),
+            100.0,
+        )
+
+        self._sync_slider(
+            self.heading_slider,
+            status.get(
+                "target_heading"
+            ),
+            100.0,
+        )
+
+        # ----------------------------------------------------
+        # Mode sync
+        # ----------------------------------------------------
+
+        mode_text = str(
+            mode
+        ).upper()
+
+        index = (
+            self.mode_combo.findText(
+                mode_text
+            )
+        )
+
+        if index >= 0:
+
+            old_block = (
+                self.mode_combo.blockSignals(
+                    True
+                )
+            )
+
+            self.mode_combo.setCurrentIndex(
+                index
+            )
+
+            self.mode_combo.blockSignals(
+                old_block
+            )
+
     # ========================================================
-    # SYNC DOUBLE
+    # SYNC HELPERS
     # ========================================================
 
     @staticmethod
@@ -2285,10 +2318,6 @@ class MainWindow(QMainWindow):
 
         try:
 
-            value = float(
-                value
-            )
-
             old_block = (
                 widget.blockSignals(
                     True
@@ -2296,7 +2325,7 @@ class MainWindow(QMainWindow):
             )
 
             widget.setValue(
-                value
+                float(value)
             )
 
             widget.blockSignals(
@@ -2310,8 +2339,6 @@ class MainWindow(QMainWindow):
 
             pass
 
-    # ========================================================
-    # SYNC INT
     # ========================================================
 
     @staticmethod
@@ -2326,10 +2353,6 @@ class MainWindow(QMainWindow):
 
         try:
 
-            value = int(
-                value
-            )
-
             old_block = (
                 widget.blockSignals(
                     True
@@ -2337,7 +2360,7 @@ class MainWindow(QMainWindow):
             )
 
             widget.setValue(
-                value
+                int(value)
             )
 
             widget.blockSignals(
@@ -2351,8 +2374,6 @@ class MainWindow(QMainWindow):
 
             pass
 
-    # ========================================================
-    # SYNC SLIDER
     # ========================================================
 
     @staticmethod
@@ -2368,17 +2389,17 @@ class MainWindow(QMainWindow):
 
         try:
 
-            slider_value = int(
-                float(value)
-                * scale
-            )
-
-            old_block = widget.blockSignals(
-                True
+            old_block = (
+                widget.blockSignals(
+                    True
+                )
             )
 
             widget.setValue(
-                slider_value
+                int(
+                    float(value)
+                    * scale
+                )
             )
 
             widget.blockSignals(
@@ -2393,11 +2414,9 @@ class MainWindow(QMainWindow):
             pass
 
     # ========================================================
-    # SET DOUBLE WITHOUT SIGNAL
-    # ========================================================
 
     @staticmethod
-    def _set_double_without_signal(
+    def _set_double_silent(
         widget,
         value,
     ):
@@ -2417,11 +2436,9 @@ class MainWindow(QMainWindow):
         )
 
     # ========================================================
-    # SET SLIDER WITHOUT SIGNAL
-    # ========================================================
 
     @staticmethod
-    def _set_slider_without_signal(
+    def _set_slider_silent(
         widget,
         value,
     ):
@@ -2441,7 +2458,7 @@ class MainWindow(QMainWindow):
         )
 
     # ========================================================
-    # FORMAT FLOAT
+    # UTIL
     # ========================================================
 
     @staticmethod
@@ -2464,8 +2481,6 @@ class MainWindow(QMainWindow):
             return "--"
 
     # ========================================================
-    # TO FLOAT
-    # ========================================================
 
     @staticmethod
     def _to_float(
@@ -2485,6 +2500,20 @@ class MainWindow(QMainWindow):
         ):
 
             return default
+
+    # ========================================================
+    # WORKER RUNNING
+    # ========================================================
+
+    def _worker_running(
+        self,
+    ):
+
+        return (
+            self.worker is not None
+            and
+            self.worker.isRunning()
+        )
 
     # ========================================================
     # ERROR
@@ -2507,6 +2536,14 @@ class MainWindow(QMainWindow):
             False
         )
 
+        self.start_button.setEnabled(
+            True
+        )
+
+        self.stop_button.setEnabled(
+            False
+        )
+
     # ========================================================
     # CLOSE
     # ========================================================
@@ -2515,6 +2552,34 @@ class MainWindow(QMainWindow):
         self,
         event,
     ):
+
+        # ----------------------------------------------------
+        # Remove global wheel filter.
+        # ----------------------------------------------------
+
+        app = QApplication.instance()
+
+        if (
+            app is not None
+            and
+            self._wheel_filter is not None
+        ):
+
+            try:
+
+                app.removeEventFilter(
+                    self._wheel_filter
+                )
+
+            except Exception:
+
+                pass
+
+            self._wheel_filter = None
+
+        # ----------------------------------------------------
+        # Stop simulation.
+        # ----------------------------------------------------
 
         if self.worker is not None:
 
