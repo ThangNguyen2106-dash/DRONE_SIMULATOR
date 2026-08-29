@@ -24,7 +24,7 @@ from gui.drone_config_panel import DroneConfigPanel
 from gui.mavlink_config_panel import MAVLinkConfigPanel
 from gui.joystick_panel import JoystickPanel
 from gui.mission_panel import MissionPanel
-from core.version_check import check_for_update
+from core.version_check import check_for_update, pull_latest
 
 
 # ============================================================
@@ -50,6 +50,33 @@ class _VersionCheckThread(QThread):
         result = check_for_update(
             self.repo_dir
         )
+
+        # Outdated: try to fast-forward automatically before
+        # reporting back, so a plain restart is enough to pick
+        # up the new code on a test machine — no manual `git
+        # pull` step. pull_latest() only ever fast-forwards
+        # (--ff-only), so it's a no-op (not a data-losing
+        # force) if the checkout has local edits or diverged
+        # history.
+
+        if result.get("status") == "outdated":
+
+            pulled = pull_latest(
+                self.repo_dir,
+                result.get("branch"),
+            )
+
+            result["pulled"] = pulled
+
+            if pulled:
+
+                # Re-check so the label reflects the new HEAD.
+
+                result = check_for_update(
+                    self.repo_dir
+                )
+
+                result["pulled"] = True
 
         self.result_ready.emit(
             result
@@ -272,11 +299,32 @@ class MainWindow(QMainWindow):
 
         remote = result.get("remote") or "?"
 
+        pulled = result.get("pulled")
+
         print(
             "[VERSION CHECK] "
-            f"status={status} branch={branch} "
+            f"status={status} pulled={pulled} branch={branch} "
             f"local={local} remote={remote}"
         )
+
+        if pulled:
+
+            self.version_label.setText(
+                f"v.{local} (vừa cập nhật)"
+            )
+
+            QMessageBox.information(
+                self,
+                "Đã tự động cập nhật",
+                "Đã tải xong bản mới nhất của simulator.\n\n"
+                f"Nhánh: {branch}\n"
+                f"Bản mới: {local}\n\n"
+                "Vui lòng đóng và mở lại ứng dụng để áp dụng "
+                "code mới (bản đang chạy vẫn là code cũ đã "
+                "nạp từ trước).",
+            )
+
+            return
 
         if status == "outdated":
 
@@ -287,11 +335,13 @@ class MainWindow(QMainWindow):
             QMessageBox.information(
                 self,
                 "Có bản cập nhật mới",
-                "Bạn đang chạy bản cũ của simulator.\n\n"
+                "Bạn đang chạy bản cũ của simulator, và tự động "
+                "cập nhật không thực hiện được (có thể do đang "
+                "sửa code dở, hoặc lịch sử git đã rẽ nhánh).\n\n"
                 f"Nhánh: {branch}\n"
                 f"Bản đang chạy: {local}\n"
                 f"Bản mới nhất: {remote}\n\n"
-                "Chạy 'git pull' để cập nhật.",
+                "Chạy 'git pull' thủ công để cập nhật.",
             )
 
             return

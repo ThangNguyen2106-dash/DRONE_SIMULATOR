@@ -116,3 +116,32 @@ def check_for_update(
     )
 
     return result
+
+
+def pull_latest(
+    repo_dir,
+    branch,
+    remote="origin",
+    timeout=30.0,
+):
+    """
+    Fast-forward the local checkout to the remote branch tip.
+
+    Uses `--ff-only` so it can never rewrite or discard local
+    commits/changes — if the working tree has edits that would
+    be overwritten, or history has diverged, git refuses and
+    this returns False instead of forcing anything.
+    """
+
+    output = _run_git(
+        [
+            "pull",
+            "--ff-only",
+            remote,
+            branch,
+        ],
+        repo_dir,
+        timeout,
+    )
+
+    return output is not None
