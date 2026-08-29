@@ -11,4 +11,4 @@ this at all — they compare git commit hashes instead, see
 core/version_check.py.
 """
 
-__version__ = "1.0.0"
+__version__ = "1.0.2"
