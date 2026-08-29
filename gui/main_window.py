@@ -1,4 +1,4 @@
-from PySide6.QtCore import QObject, QEvent, Qt
+from PySide6.QtCore import QObject, QEvent, Qt, QThread, Signal
 from PySide6.QtWidgets import (
     QApplication,
     QMainWindow,
@@ -24,6 +24,36 @@ from gui.drone_config_panel import DroneConfigPanel
 from gui.mavlink_config_panel import MAVLinkConfigPanel
 from gui.joystick_panel import JoystickPanel
 from gui.mission_panel import MissionPanel
+from core.version_check import check_for_update
+
+
+# ============================================================
+# VERSION CHECK THREAD
+#
+# git ls-remote can block on network I/O, so the check runs
+# off the GUI thread and reports back through a signal instead
+# of ever touching widgets directly.
+# ============================================================
+
+class _VersionCheckThread(QThread):
+
+    result_ready = Signal(dict)
+
+    def __init__(self, repo_dir, parent=None):
+
+        super().__init__(parent)
+
+        self.repo_dir = repo_dir
+
+    def run(self):
+
+        result = check_for_update(
+            self.repo_dir
+        )
+
+        self.result_ready.emit(
+            result
+        )
 
 
 # ============================================================
@@ -202,6 +232,57 @@ class MainWindow(QMainWindow):
         # ====================================================
 
         self._setup_ui()
+
+        self._start_version_check()
+
+    # ========================================================
+    # VERSION CHECK
+    # ========================================================
+
+    def _start_version_check(self):
+
+        import os
+
+        repo_dir = os.path.dirname(
+            os.path.dirname(
+                os.path.abspath(__file__)
+            )
+        )
+
+        self._version_check_thread = (
+            _VersionCheckThread(
+                repo_dir,
+                self,
+            )
+        )
+
+        self._version_check_thread.result_ready.connect(
+            self._on_version_check_result
+        )
+
+        self._version_check_thread.start()
+
+    def _on_version_check_result(self, result):
+
+        if result.get("status") != "outdated":
+
+            return
+
+        branch = result.get("branch") or "?"
+
+        local = result.get("local") or "?"
+
+        remote = result.get("remote") or "?"
+
+        QMessageBox.information(
+            self,
+            "Có bản cập nhật mới",
+            "Bạn đang chạy bản cũ của simulator.\n\n"
+            f"Nhánh: {branch}\n"
+            f"Bản đang chạy: {local}\n"
+            f"Bản mới nhất: {remote}\n\n"
+            "Chạy 'git pull' để cập nhật.",
+        )
 
     # ========================================================
     # SETUP UI
@@ -3010,6 +3091,18 @@ class MainWindow(QMainWindow):
         self,
         event,
     ):
+
+        # ----------------------------------------------------
+        # Stop the version-check thread if still running.
+        # ----------------------------------------------------
+
+        thread = getattr(
+            self, "_version_check_thread", None
+        )
+
+        if thread is not None and thread.isRunning():
+
+            thread.wait(100)
 
         # ----------------------------------------------------
         # Remove global wheel filter.
