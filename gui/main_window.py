@@ -264,9 +264,7 @@ class MainWindow(QMainWindow):
 
     def _on_version_check_result(self, result):
 
-        if result.get("status") != "outdated":
-
-            return
+        status = result.get("status")
 
         branch = result.get("branch") or "?"
 
@@ -274,14 +272,43 @@ class MainWindow(QMainWindow):
 
         remote = result.get("remote") or "?"
 
-        QMessageBox.information(
-            self,
-            "Có bản cập nhật mới",
-            "Bạn đang chạy bản cũ của simulator.\n\n"
-            f"Nhánh: {branch}\n"
-            f"Bản đang chạy: {local}\n"
-            f"Bản mới nhất: {remote}\n\n"
-            "Chạy 'git pull' để cập nhật.",
+        print(
+            "[VERSION CHECK] "
+            f"status={status} branch={branch} "
+            f"local={local} remote={remote}"
+        )
+
+        if status == "outdated":
+
+            self.version_label.setText(
+                f"v.{local} (có bản mới: {remote})"
+            )
+
+            QMessageBox.information(
+                self,
+                "Có bản cập nhật mới",
+                "Bạn đang chạy bản cũ của simulator.\n\n"
+                f"Nhánh: {branch}\n"
+                f"Bản đang chạy: {local}\n"
+                f"Bản mới nhất: {remote}\n\n"
+                "Chạy 'git pull' để cập nhật.",
+            )
+
+            return
+
+        if status == "up_to_date":
+
+            self.version_label.setText(
+                f"v.{local} (mới nhất)"
+            )
+
+            return
+
+        # status == "unknown": not a git checkout, no network,
+        # or git isn't installed.
+
+        self.version_label.setText(
+            "v.? (không kiểm tra được)"
         )
 
     # ========================================================
@@ -572,6 +599,27 @@ class MainWindow(QMainWindow):
         self._set_arm_led(False)
 
         layout.addStretch()
+
+        # Filled in asynchronously by _on_version_check_result()
+        # once the background git check completes.
+
+        self.version_label = QLabel(
+            "v.đang kiểm tra..."
+        )
+
+        self.version_label.setStyleSheet(
+            """
+            QLabel {
+                font-size: 12px;
+                color: gray;
+                padding: 5px;
+            }
+            """
+        )
+
+        layout.addWidget(
+            self.version_label
+        )
 
         # ====================================================
         # START / STOP
