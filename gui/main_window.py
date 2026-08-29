@@ -1,4 +1,4 @@
-from PySide6.QtCore import QObject, QEvent, Qt, QThread, Signal
+from PySide6.QtCore import QObject, QEvent, Qt
 from PySide6.QtWidgets import (
     QApplication,
     QMainWindow,
@@ -24,36 +24,6 @@ from gui.drone_config_panel import DroneConfigPanel
 from gui.mavlink_config_panel import MAVLinkConfigPanel
 from gui.joystick_panel import JoystickPanel
 from gui.mission_panel import MissionPanel
-from core.version_check import check_for_update
-
-
-# ============================================================
-# VERSION CHECK THREAD
-#
-# git ls-remote can block on network I/O, so the check runs
-# off the GUI thread and reports back through a signal instead
-# of ever touching widgets directly.
-# ============================================================
-
-class _VersionCheckThread(QThread):
-
-    result_ready = Signal(dict)
-
-    def __init__(self, repo_dir, parent=None):
-
-        super().__init__(parent)
-
-        self.repo_dir = repo_dir
-
-    def run(self):
-
-        result = check_for_update(
-            self.repo_dir
-        )
-
-        self.result_ready.emit(
-            result
-        )
 
 
 # ============================================================
@@ -191,8 +161,8 @@ class MainWindow(QMainWindow):
         )
 
         self.setMinimumSize(
-            1200,
-            850,
+            900,
+            620,
         )
 
         # ====================================================
@@ -233,262 +203,178 @@ class MainWindow(QMainWindow):
 
         self._setup_ui()
 
-        self._start_version_check()
-
-    # ========================================================
-    # VERSION CHECK
-    # ========================================================
-
-    def _start_version_check(self):
-
-        import os
-
-        repo_dir = os.path.dirname(
-            os.path.dirname(
-                os.path.abspath(__file__)
-            )
-        )
-
-        self._version_check_thread = (
-            _VersionCheckThread(
-                repo_dir,
-                self,
-            )
-        )
-
-        self._version_check_thread.result_ready.connect(
-            self._on_version_check_result
-        )
-
-        self._version_check_thread.start()
-
-    def _on_version_check_result(self, result):
-
-        status = result.get("status")
-
-        branch = result.get("branch") or "?"
-
-        local = result.get("local") or "?"
-
-        remote = result.get("remote") or "?"
-
-        print(
-            "[VERSION CHECK] "
-            f"status={status} branch={branch} "
-            f"local={local} remote={remote}"
-        )
-
-        if status == "outdated":
-
-            self.version_label.setText(
-                f"v.{local} (có bản mới: {remote})"
-            )
-
-            QMessageBox.information(
-                self,
-                "Có bản cập nhật mới",
-                "Bạn đang chạy bản cũ của simulator.\n\n"
-                f"Nhánh: {branch}\n"
-                f"Bản đang chạy: {local}\n"
-                f"Bản mới nhất: {remote}\n\n"
-                "Chạy 'git pull' để cập nhật.",
-            )
-
-            return
-
-        if status == "up_to_date":
-
-            self.version_label.setText(
-                f"v.{local} (mới nhất)"
-            )
-
-            return
-
-        # status == "unknown": not a git checkout, no network,
-        # or git isn't installed.
-
-        self.version_label.setText(
-            "v.? (không kiểm tra được)"
-        )
-
     # ========================================================
     # SETUP UI
     # ========================================================
 
     def _setup_ui(self):
-
         central = QWidget()
+        self.setCentralWidget(central)
 
-        self.setCentralWidget(
-            central
-        )
+        root_layout = QVBoxLayout(central)
+        root_layout.setContentsMargins(10, 10, 10, 10)
+        root_layout.setSpacing(8)
 
-        root_layout = QVBoxLayout(
-            central
-        )
+        title = QLabel("RIGEL UAV SIMULATOR")
+        title.setObjectName("appTitle")
+        title.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        root_layout.addWidget(title)
 
-        root_layout.setContentsMargins(
-            15,
-            15,
-            15,
-            15,
-        )
+        self._create_status_panel(root_layout)
 
-        root_layout.setSpacing(
-            10
-        )
+        # Responsive two-column workspace:
+        # left = always-visible 3D flight view + key telemetry
+        # right = scrollable configuration/control/mission panels.
+        from PySide6.QtWidgets import QSplitter
+        from gui.drone_3d_widget import Drone3DWidget
 
-        # ====================================================
-        # TITLE
-        # ====================================================
+        splitter = QSplitter(Qt.Horizontal)
+        splitter.setChildrenCollapsible(False)
+        splitter.setStretchFactor(0, 5)
+        splitter.setStretchFactor(1, 4)
 
-        title = QLabel(
-            "RIGEL UAV SIMULATOR"
-        )
+        left = QWidget()
+        left_layout = QVBoxLayout(left)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(8)
 
-        title.setAlignment(
-            Qt.AlignCenter
-        )
+        view_frame = QGroupBox("3D FLIGHT VIEW")
+        view_layout = QVBoxLayout(view_frame)
+        view_layout.setContentsMargins(4, 4, 4, 4)
+        self.drone_3d = Drone3DWidget()
+        view_layout.addWidget(self.drone_3d)
+        left_layout.addWidget(view_frame, 1)
 
-        title.setStyleSheet(
-            """
-            QLabel {
-                font-size: 26px;
-                font-weight: bold;
-                padding: 10px;
-            }
-            """
-        )
+        quick = QFrame()
+        quick.setObjectName("quickTelemetry")
+        qgrid = QGridLayout(quick)
+        qgrid.setContentsMargins(12, 8, 12, 8)
+        self.quick_alt = QLabel("0.00 m")
+        self.quick_speed = QLabel("0.00 m/s")
+        self.quick_mode = QLabel("STANDBY")
+        self.quick_battery = QLabel("100 %")
+        self.quick_wp = QLabel("--")
+        quick_items = [
+            ("ALT", self.quick_alt), ("SPEED", self.quick_speed),
+            ("MODE", self.quick_mode), ("BATTERY", self.quick_battery),
+            ("WP", self.quick_wp),
+        ]
+        for i, (name, value) in enumerate(quick_items):
+            qgrid.addWidget(QLabel(name), 0, i)
+            qgrid.addWidget(value, 1, i)
+        left_layout.addWidget(quick)
 
-        root_layout.addWidget(
-            title
-        )
-
-        # ====================================================
-        # STATUS (fixed top bar — stays visible while the rest
-        # of the panels below scroll)
-        # ====================================================
-
-        self._create_status_panel(
-            root_layout
-        )
-
-        # ====================================================
-        # SCROLL AREA
-        # ====================================================
+        splitter.addWidget(left)
 
         scroll = QScrollArea()
-
-        scroll.setWidgetResizable(
-            True
-        )
-
-        scroll.setAlignment(
-            Qt.AlignHCenter
-        )
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
 
         content = QWidget()
+        content.setMaximumWidth(980)
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(4, 4, 4, 4)
+        content_layout.setSpacing(8)
 
-        # Keep the form-style panels at a readable width and
-        # center them instead of stretching labels/fields
-        # across a maximized ultra-wide window.
-        content.setMaximumWidth(
-            1400
-        )
+        self.drone_config_panel = DroneConfigPanel()
+        content_layout.addWidget(self.drone_config_panel)
 
-        content_layout = QVBoxLayout(
-            content
-        )
+        self.mavlink_config_panel = MAVLinkConfigPanel()
+        self.mavlink_config_panel.on_debug_toggled = self._on_telemetry_debug_toggled
+        content_layout.addWidget(self.mavlink_config_panel)
 
-        content_layout.setSpacing(
-            10
-        )
+        self._create_live_control_panel(content_layout)
 
-        scroll.setWidget(
-            content
-        )
+        self.joystick_panel = JoystickPanel()
+        self.joystick_panel.on_command = self._on_joystick_command
+        content_layout.addWidget(self.joystick_panel)
 
-        root_layout.addWidget(
-            scroll
-        )
+        self.mission_panel = MissionPanel()
+        self.mission_panel.on_command = self._on_mission_command
+        content_layout.addWidget(self.mission_panel)
 
-        # ====================================================
-        # INITIAL DRONE CONFIG
-        # ====================================================
-
-        self.drone_config_panel = (
-            DroneConfigPanel()
-        )
-
-        content_layout.addWidget(
-            self.drone_config_panel
-        )
-
-        # ====================================================
-        # MAVLINK CONFIG
-        # ====================================================
-
-        self.mavlink_config_panel = (
-            MAVLinkConfigPanel()
-        )
-
-        self.mavlink_config_panel.on_debug_toggled = (
-            self._on_telemetry_debug_toggled
-        )
-
-        content_layout.addWidget(
-            self.mavlink_config_panel
-        )
-
-        # ====================================================
-        # LIVE CONTROL
-        # ====================================================
-
-        self._create_live_control_panel(
-            content_layout
-        )
-
-        # ====================================================
-        # JOYSTICK
-        # ====================================================
-
-        self.joystick_panel = (
-            JoystickPanel()
-        )
-
-        self.joystick_panel.on_command = (
-            self._on_joystick_command
-        )
-
-        content_layout.addWidget(
-            self.joystick_panel
-        )
-
-        # ====================================================
-        # MISSION
-        # ====================================================
-
-        self.mission_panel = (
-            MissionPanel()
-        )
-
-        self.mission_panel.on_command = (
-            self._on_mission_command
-        )
-
-        content_layout.addWidget(
-            self.mission_panel
-        )
-
-        # ====================================================
-        # TELEMETRY
-        # ====================================================
-
-        self._create_telemetry_panel(
-            content_layout
-        )
-
+        self._create_telemetry_panel(content_layout)
         content_layout.addStretch()
+
+        scroll.setWidget(content)
+        splitter.addWidget(scroll)
+
+        root_layout.addWidget(splitter, 1)
+
+        self._apply_modern_style()
+
+    def _apply_modern_style(self):
+        self.setStyleSheet("""
+            QMainWindow, QWidget {
+                background: #0b1220;
+                color: #dce6f2;
+                font-family: "Segoe UI";
+                font-size: 10pt;
+            }
+            #appTitle {
+                font-size: 20pt;
+                font-weight: 700;
+                padding: 2px 4px 4px 4px;
+                color: #f1f6fb;
+            }
+            QFrame, QGroupBox {
+                background: #111b2b;
+                border: 1px solid #24354a;
+                border-radius: 10px;
+            }
+            QGroupBox {
+                margin-top: 9px;
+                padding-top: 12px;
+                font-weight: 700;
+                color: #a9bfd5;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 12px;
+                padding: 0 5px;
+                background: #111b2b;
+            }
+            QPushButton {
+                background: #1c3047;
+                border: 1px solid #31506f;
+                border-radius: 7px;
+                padding: 7px 12px;
+                min-height: 28px;
+            }
+            QPushButton:hover { background: #284461; }
+            QPushButton:pressed { background: #14283d; }
+            QPushButton:disabled { color: #627386; background: #131d29; }
+            QComboBox, QSpinBox, QDoubleSpinBox {
+                background: #0c1625;
+                border: 1px solid #2b425c;
+                border-radius: 6px;
+                padding: 5px 7px;
+                min-height: 26px;
+            }
+            QSlider::groove:horizontal {
+                height: 5px; background: #26384d; border-radius: 2px;
+            }
+            QSlider::handle:horizontal {
+                width: 14px; margin: -5px 0; border-radius: 7px;
+                background: #5d9bd3;
+            }
+            QTableWidget {
+                background: #0c1625;
+                alternate-background-color: #101d2e;
+                gridline-color: #25384d;
+                border: 1px solid #24354a;
+            }
+            QHeaderView::section {
+                background: #17263a;
+                color: #b9cce0;
+                padding: 6px;
+                border: 0;
+            }
+            #quickTelemetry QLabel {
+                background: transparent;
+                border: 0;
+            }
+        """)
 
     # ========================================================
     # STATUS PANEL
@@ -599,27 +485,6 @@ class MainWindow(QMainWindow):
         self._set_arm_led(False)
 
         layout.addStretch()
-
-        # Filled in asynchronously by _on_version_check_result()
-        # once the background git check completes.
-
-        self.version_label = QLabel(
-            "v.đang kiểm tra..."
-        )
-
-        self.version_label.setStyleSheet(
-            """
-            QLabel {
-                font-size: 12px;
-                color: gray;
-                padding: 5px;
-            }
-            """
-        )
-
-        layout.addWidget(
-            self.version_label
-        )
 
         # ====================================================
         # START / STOP
@@ -2616,6 +2481,20 @@ class MainWindow(QMainWindow):
         )
 
         # ----------------------------------------------------
+        # 3D view + compact dashboard
+        # ----------------------------------------------------
+        if hasattr(self, "drone_3d"):
+            self.drone_3d.update_telemetry(status)
+        if hasattr(self, "quick_alt"):
+            self.quick_alt.setText(f"{self._to_float(alt):.2f} m")
+            self.quick_speed.setText(f"{self._to_float(speed):.2f} m/s")
+            self.quick_mode.setText(str(mode).upper())
+            self.quick_battery.setText(f"{self._to_float(battery):.1f} %")
+            self.quick_wp.setText(
+                f"{current_wp}/{mission_count}" if current_wp is not None and mission_count > 0 else "--"
+            )
+
+        # ----------------------------------------------------
         # Display
         # ----------------------------------------------------
 
@@ -3139,18 +3018,6 @@ class MainWindow(QMainWindow):
         self,
         event,
     ):
-
-        # ----------------------------------------------------
-        # Stop the version-check thread if still running.
-        # ----------------------------------------------------
-
-        thread = getattr(
-            self, "_version_check_thread", None
-        )
-
-        if thread is not None and thread.isRunning():
-
-            thread.wait(100)
 
         # ----------------------------------------------------
         # Remove global wheel filter.
