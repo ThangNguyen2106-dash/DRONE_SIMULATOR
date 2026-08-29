@@ -359,6 +359,46 @@ class SimulationWorker(QThread):
             return
 
         # ====================================================
+        # BODY VELOCITY (JOYSTICK TILT CONTROL)
+        # ====================================================
+
+        if command == "body_velocity":
+
+            if not isinstance(
+                value,
+                dict,
+            ):
+
+                return
+
+            self.drone.set_body_velocity(
+                forward=value.get(
+                    "forward",
+                    0.0,
+                ),
+                lateral=value.get(
+                    "lateral",
+                    0.0,
+                ),
+            )
+
+            return
+
+        # ====================================================
+        # RELEASE BODY VELOCITY CONTROL
+        # ====================================================
+
+        if command == "release_body_control":
+
+            self.drone.release_body_control()
+
+            print(
+                "[RUNTIME] Body tilt control released"
+            )
+
+            return
+
+        # ====================================================
         # SPEED
         # ====================================================
 
@@ -727,6 +767,20 @@ class SimulationWorker(QThread):
             return
 
         # ====================================================
+        # TELEMETRY DEBUG VERBOSE
+        # ====================================================
+
+        if command == "telemetry_debug":
+
+            if self.telemetry is not None:
+
+                self.telemetry.set_debug_verbose(
+                    bool(value)
+                )
+
+            return
+
+        # ====================================================
         # ARM
         # ====================================================
 
@@ -815,6 +869,20 @@ class SimulationWorker(QThread):
             return
 
         # ====================================================
+        # SET HOME = CURRENT POSITION
+        # ====================================================
+
+        if command == "set_home":
+
+            self.drone.set_home_here()
+
+            print(
+                "[RUNTIME] HOME SET TO CURRENT POSITION"
+            )
+
+            return
+
+        # ====================================================
         # ADD WAYPOINT
         # ====================================================
 
@@ -862,10 +930,15 @@ class SimulationWorker(QThread):
                         "RTL" if action == "rtl" else "",
                     ),
                     action=action,
-                    command=(
-                        20
-                        if action == "rtl"
-                        else 16
+                    command=value.get(
+                        "command",
+                        {
+                            "rtl": 20,
+                            "takeoff": 22,
+                            "land": 21,
+                            "loiter": 19,
+                            "delay": 93,
+                        }.get(action, 16),
                     ),
                 )
             )
@@ -899,6 +972,15 @@ class SimulationWorker(QThread):
         # ====================================================
 
         if command == "start_mission":
+
+            # The joystick panel keeps sending body_velocity
+            # (even at zero) as long as it's enabled, which
+            # locks the flight model into body-frame control
+            # and blocks the mission's target_speed/heading
+            # autopilot. Hand horizontal control back before
+            # flying the mission.
+
+            self.drone.release_body_control()
 
             result = (
                 self.drone.start_mission()
@@ -1177,6 +1259,11 @@ class SimulationWorker(QThread):
             )
 
             print(
+                f"[MAVLINK] Protocol      : "
+                f"{self.mavlink_config.get('connection_type', 'UDP')}"
+            )
+
+            print(
                 f"[MAVLINK] TX -> GCS     : "
                 f"{tx_host}:{tx_port}"
             )
@@ -1202,9 +1289,43 @@ class SimulationWorker(QThread):
                 "[SIM] Creating MAVLink connection..."
             )
 
-            connection_string = (
-                f"udp:{tx_host}:{tx_port}"
-            )
+            connection_type = str(
+                self.mavlink_config.get(
+                    "connection_type",
+                    "UDP",
+                )
+            ).strip().lower()
+
+            if connection_type == "serial":
+
+                serial_device = str(
+                    self.mavlink_config.get(
+                        "serial_device",
+                        "COM3",
+                    )
+                ).strip()
+
+                baudrate = self._get_int(
+                    self.mavlink_config,
+                    "baudrate",
+                    57600,
+                )
+
+                connection_string = (
+                    f"serial:{serial_device}:{baudrate}"
+                )
+
+            else:
+
+                protocol = (
+                    "tcp"
+                    if connection_type == "tcp"
+                    else "udp"
+                )
+
+                connection_string = (
+                    f"{protocol}:{tx_host}:{tx_port}"
+                )
 
             self.mavlink = MAVLinkConnection(
                 connection_string=connection_string,
@@ -1271,6 +1392,13 @@ class SimulationWorker(QThread):
                 connection=self.mavlink,
                 system_id=system_id,
                 component_id=component_id,
+            )
+
+            self.telemetry.debug_verbose = bool(
+                self.mavlink_config.get(
+                    "debug_verbose",
+                    False,
+                )
             )
 
             print(
@@ -1619,10 +1747,21 @@ class SimulationWorker(QThread):
 
                 continue
 
-            print(
-                f"[MAVLINK RX] "
-                f"{message_type}"
-            )
+            # ------------------------------------------------
+            # Skip logging high-frequency, low-value chatter
+            # (GCS heartbeats and stream requests can arrive
+            # several times per second and drown the console).
+            # ------------------------------------------------
+
+            if message_type not in (
+                "HEARTBEAT",
+                "REQUEST_DATA_STREAM",
+            ):
+
+                print(
+                    f"[MAVLINK RX] "
+                    f"{message_type}"
+                )
 
             # =================================================
             # MISSION
@@ -1719,6 +1858,7 @@ class SimulationWorker(QThread):
                 "longitude": wp.longitude,
                 "altitude": wp.altitude,
                 "speed": wp.speed,
+                "hold_time": wp.hold_time,
             }
             for wp in waypoints
         ]

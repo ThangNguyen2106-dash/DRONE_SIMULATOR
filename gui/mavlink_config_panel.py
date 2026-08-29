@@ -7,6 +7,7 @@ from PySide6.QtWidgets import (
     QSpinBox,
     QDoubleSpinBox,
     QLabel,
+    QCheckBox,
 )
 
 
@@ -260,6 +261,27 @@ class MAVLinkConfigPanel(QGroupBox):
         )
 
         # ====================================================
+        # VERBOSE TX DEBUG
+        # ====================================================
+
+        # Callable(bool), set by MainWindow, to push this
+        # toggle to the running SimulationWorker live.
+        self.on_debug_toggled = None
+
+        self.debug_verbose_checkbox = QCheckBox(
+            "Print full field values for every TX message"
+        )
+
+        self.debug_verbose_checkbox.toggled.connect(
+            self._on_debug_toggled
+        )
+
+        layout.addRow(
+            "Verbose TX Debug:",
+            self.debug_verbose_checkbox,
+        )
+
+        # ====================================================
         # MAVLINK VERSION
         # ====================================================
 
@@ -369,6 +391,21 @@ class MAVLinkConfigPanel(QGroupBox):
         # ====================================================
 
         self._update_connection_string()
+
+    # ========================================================
+    # VERBOSE TX DEBUG
+    # ========================================================
+
+    def _on_debug_toggled(
+        self,
+        enabled,
+    ):
+
+        if self.on_debug_toggled is not None:
+
+            self.on_debug_toggled(
+                bool(enabled)
+            )
 
     # ========================================================
     # CONNECTION TYPE
@@ -727,6 +764,9 @@ class MAVLinkConfigPanel(QGroupBox):
 
             "telemetry_rate_hz":
                 telemetry_rate,
+
+            "debug_verbose":
+                self.debug_verbose_checkbox.isChecked(),
 
             # =================================================
             # MAVLINK VERSION

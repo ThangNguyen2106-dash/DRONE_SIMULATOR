@@ -133,6 +133,9 @@ class MissionNavigator:
             alt=waypoint.altitude,
         )
 
+    def is_holding(self) -> bool:
+        return self.hold_started_at is not None
+
     def get_current_waypoint(self) -> Optional[Waypoint]:
         return self.mission.get_current_waypoint()
 

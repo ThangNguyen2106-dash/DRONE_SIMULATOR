@@ -206,7 +206,13 @@ class JoystickPanel(QGroupBox):
     Two virtual joysticks for flying the drone in FREE mode:
 
       LEFT  stick  -> X: yaw rate      Y: climb / descend rate
-      RIGHT stick  -> Y: forward speed (X unused)
+      RIGHT stick  -> X: roll (strafe left/right)
+                       Y: pitch (move forward/backward)
+
+    The right stick leans the drone like a real quadrotor:
+    tilt angle is commanded directly and translated into
+    body-frame velocity (roll -> lateral, pitch -> forward),
+    independent of the nose heading set by the left stick.
 
     Commands are forwarded to plain callback attributes so
     this widget stays decoupled from SimulationWorker, in
@@ -216,6 +222,10 @@ class JoystickPanel(QGroupBox):
     MAX_YAW_RATE = 60.0
     MAX_CLIMB_RATE = 3.0
     MAX_SPEED = 15.0
+
+    # Kept in sync with FlightModel.MAX_TILT_ANGLE; only used
+    # here to preview the lean angle on the readout label.
+    MAX_TILT_ANGLE = 25.0
 
     TICK_MS = 50
 
@@ -279,7 +289,7 @@ class JoystickPanel(QGroupBox):
 
         right_box = QVBoxLayout()
 
-        right_label = QLabel("SPEED")
+        right_label = QLabel("TILT (ROLL / PITCH)")
         right_label.setAlignment(Qt.AlignCenter)
 
         self.right_stick = JoystickWidget()
@@ -289,7 +299,9 @@ class JoystickPanel(QGroupBox):
             self.right_stick, 0, Qt.AlignCenter
         )
 
-        self.right_readout = QLabel("speed: 0.0 m/s")
+        self.right_readout = QLabel(
+            "roll: 0.0°   pitch: 0.0°"
+        )
         self.right_readout.setAlignment(Qt.AlignCenter)
 
         right_box.addWidget(self.right_readout)
@@ -304,6 +316,8 @@ class JoystickPanel(QGroupBox):
 
     def set_enabled(self, enabled):
 
+        was_enabled = self.left_stick.isEnabled()
+
         self.left_stick.setEnabled(enabled)
         self.right_stick.setEnabled(enabled)
 
@@ -311,6 +325,12 @@ class JoystickPanel(QGroupBox):
 
             self.left_stick.reset()
             self.right_stick.reset()
+
+            if was_enabled:
+
+                # Hand horizontal movement back to the normal
+                # speed/heading autopilot (mission, RTL, ...).
+                self._emit("release_body_control", None)
 
     # ========================================================
     # SYNC FROM TELEMETRY
@@ -359,15 +379,21 @@ class JoystickPanel(QGroupBox):
 
         left_x = self._apply_deadzone(left_x)
         left_y = self._apply_deadzone(left_y)
+        right_x = self._apply_deadzone(right_x)
         right_y = self._apply_deadzone(right_y)
 
         yaw_rate = left_x * self.MAX_YAW_RATE
         climb_rate = left_y * self.MAX_CLIMB_RATE
 
-        speed = max(
-            0.0,
-            right_y * self.MAX_SPEED,
-        )
+        # Right stick leans the drone: Y -> pitch (forward),
+        # X -> roll (lateral/strafe), each mapped to body-frame
+        # velocity and shown to the user as a tilt angle.
+
+        forward_speed = right_y * self.MAX_SPEED
+        lateral_speed = right_x * self.MAX_SPEED
+
+        pitch_preview = right_y * self.MAX_TILT_ANGLE
+        roll_preview = right_x * self.MAX_TILT_ANGLE
 
         self.left_readout.setText(
             f"yaw: {yaw_rate:+.1f} °/s   "
@@ -375,11 +401,9 @@ class JoystickPanel(QGroupBox):
         )
 
         self.right_readout.setText(
-            f"speed: {speed:.1f} m/s"
+            f"roll: {roll_preview:+.1f}°   "
+            f"pitch: {pitch_preview:+.1f}°"
         )
-
-        if yaw_rate == 0.0 and climb_rate == 0.0 and speed == 0.0:
-            return
 
         if yaw_rate != 0.0:
 
@@ -398,7 +422,18 @@ class JoystickPanel(QGroupBox):
 
             self._emit("altitude", self.target_altitude)
 
-        self._emit("speed", speed)
+        # Sent every tick (even when centered) since this is a
+        # direct velocity setpoint, not an increment: skipping
+        # the zero case would leave the last nonzero tilt
+        # command latched forever.
+
+        self._emit(
+            "body_velocity",
+            {
+                "forward": forward_speed,
+                "lateral": lateral_speed,
+            },
+        )
 
     # --------------------------------------------------------
 

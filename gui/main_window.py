@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QScrollArea,
     QAbstractSpinBox,
+    QMessageBox,
 )
 
 from gui.simulation_worker import SimulationWorker
@@ -170,6 +171,12 @@ class MainWindow(QMainWindow):
 
         self.worker = None
 
+        self._drone_armed = False
+
+        self._drone_alt = 0.0
+
+        self._joystick_warned = False
+
         # ====================================================
         # GLOBAL WHEEL FILTER
         # ====================================================
@@ -250,6 +257,15 @@ class MainWindow(QMainWindow):
         )
 
         # ====================================================
+        # STATUS (fixed top bar — stays visible while the rest
+        # of the panels below scroll)
+        # ====================================================
+
+        self._create_status_panel(
+            root_layout
+        )
+
+        # ====================================================
         # SCROLL AREA
         # ====================================================
 
@@ -289,14 +305,6 @@ class MainWindow(QMainWindow):
         )
 
         # ====================================================
-        # STATUS
-        # ====================================================
-
-        self._create_status_panel(
-            content_layout
-        )
-
-        # ====================================================
         # INITIAL DRONE CONFIG
         # ====================================================
 
@@ -314,6 +322,10 @@ class MainWindow(QMainWindow):
 
         self.mavlink_config_panel = (
             MAVLinkConfigPanel()
+        )
+
+        self.mavlink_config_panel.on_debug_toggled = (
+            self._on_telemetry_debug_toggled
         )
 
         content_layout.addWidget(
@@ -379,47 +391,31 @@ class MainWindow(QMainWindow):
         parent_layout,
     ):
 
+        # Single-row "web header" style bar: status text, the
+        # MAVLink LED + label, and START/STOP all inline, kept
+        # in root_layout (outside the scroll area) so it stays
+        # pinned at the top of the window at all times.
+
         frame = QFrame()
 
         frame.setFrameShape(
             QFrame.StyledPanel
         )
 
-        layout = QVBoxLayout(
+        layout = QHBoxLayout(
             frame
-        )
-
-        title = QLabel(
-            "SIMULATION STATUS"
-        )
-
-        title.setStyleSheet(
-            """
-            QLabel {
-                font-size: 18px;
-                font-weight: bold;
-            }
-            """
-        )
-
-        layout.addWidget(
-            title
         )
 
         self.status_label = QLabel(
             "Status: STOPPED"
         )
 
-        self.status_label.setAlignment(
-            Qt.AlignCenter
-        )
-
         self.status_label.setStyleSheet(
             """
             QLabel {
-                font-size: 18px;
+                font-size: 16px;
                 font-weight: bold;
-                padding: 10px;
+                padding: 5px;
             }
             """
         )
@@ -428,12 +424,25 @@ class MainWindow(QMainWindow):
             self.status_label
         )
 
-        self.mavlink_label = QLabel(
-            "MAVLink: DISCONNECTED"
+        layout.addStretch()
+
+        # LED-style connection indicator: red = disconnected,
+        # yellow = connecting, green = connected. Just a small
+        # round QLabel colored via stylesheet, no image assets
+        # needed.
+
+        self.mavlink_led = QLabel()
+
+        self.mavlink_led.setFixedSize(14, 14)
+
+        self._set_mavlink_led(False)
+
+        layout.addWidget(
+            self.mavlink_led
         )
 
-        self.mavlink_label.setAlignment(
-            Qt.AlignCenter
+        self.mavlink_label = QLabel(
+            "MAVLink: DISCONNECTED"
         )
 
         self.mavlink_label.setStyleSheet(
@@ -449,11 +458,43 @@ class MainWindow(QMainWindow):
             self.mavlink_label
         )
 
+        layout.addStretch()
+
+        # LED-style arm indicator: red = disarmed, green = armed.
+
+        self.arm_led = QLabel()
+
+        self.arm_led.setFixedSize(14, 14)
+
+        layout.addWidget(
+            self.arm_led
+        )
+
+        self.arm_label = QLabel(
+            "DISARMED"
+        )
+
+        self.arm_label.setStyleSheet(
+            """
+            QLabel {
+                font-size: 14px;
+                font-weight: bold;
+                padding: 5px;
+            }
+            """
+        )
+
+        layout.addWidget(
+            self.arm_label
+        )
+
+        self._set_arm_led(False)
+
+        layout.addStretch()
+
         # ====================================================
         # START / STOP
         # ====================================================
-
-        buttons = QHBoxLayout()
 
         self.start_button = QPushButton(
             "START"
@@ -464,11 +505,11 @@ class MainWindow(QMainWindow):
         )
 
         self.start_button.setMinimumHeight(
-            40
+            36
         )
 
         self.stop_button.setMinimumHeight(
-            40
+            36
         )
 
         self.stop_button.setEnabled(
@@ -483,16 +524,12 @@ class MainWindow(QMainWindow):
             self.stop_simulation
         )
 
-        buttons.addWidget(
+        layout.addWidget(
             self.start_button
         )
 
-        buttons.addWidget(
+        layout.addWidget(
             self.stop_button
-        )
-
-        layout.addLayout(
-            buttons
         )
 
         parent_layout.addWidget(
@@ -610,6 +647,10 @@ class MainWindow(QMainWindow):
             self.on_altitude_slider_changed
         )
 
+        self.altitude_slider.sliderPressed.connect(
+            self._require_armed
+        )
+
         self.altitude_spin.valueChanged.connect(
             self.on_altitude_spin_changed
         )
@@ -690,6 +731,10 @@ class MainWindow(QMainWindow):
             self.on_speed_slider_changed
         )
 
+        self.speed_slider.sliderPressed.connect(
+            self._require_armed
+        )
+
         self.speed_spin.valueChanged.connect(
             self.on_speed_spin_changed
         )
@@ -768,6 +813,10 @@ class MainWindow(QMainWindow):
 
         self.heading_slider.valueChanged.connect(
             self.on_heading_slider_changed
+        )
+
+        self.heading_slider.sliderPressed.connect(
+            self._require_armed
         )
 
         self.heading_spin.valueChanged.connect(
@@ -1240,6 +1289,10 @@ class MainWindow(QMainWindow):
             "RTL"
         )
 
+        self.set_home_button = QPushButton(
+            "SET HOME = HERE"
+        )
+
         self.arm_button.clicked.connect(
             self.arm_drone
         )
@@ -1260,6 +1313,10 @@ class MainWindow(QMainWindow):
             self.rtl_drone
         )
 
+        self.set_home_button.clicked.connect(
+            self.set_home_here
+        )
+
         actions.addWidget(
             self.arm_button
         )
@@ -1278,6 +1335,10 @@ class MainWindow(QMainWindow):
 
         actions.addWidget(
             self.rtl_button
+        )
+
+        actions.addWidget(
+            self.set_home_button
         )
 
         layout.addLayout(
@@ -1486,6 +1547,11 @@ class MainWindow(QMainWindow):
             "MAVLink: CONNECTING..."
         )
 
+        self._set_mavlink_led(
+            False,
+            connecting=True,
+        )
+
         self.start_button.setEnabled(
             False
         )
@@ -1495,6 +1561,15 @@ class MainWindow(QMainWindow):
         )
 
         self.live_frame.setEnabled(
+            False
+        )
+
+        # Home (RTL target) is only read from this panel once,
+        # at Drone creation below — editing it after START has
+        # no effect on the running drone, which is confusing.
+        # Lock it until STOP.
+
+        self.drone_config_panel.set_enabled(
             False
         )
 
@@ -1550,6 +1625,10 @@ class MainWindow(QMainWindow):
             False
         )
 
+        self.drone_config_panel.set_enabled(
+            True
+        )
+
         self.start_button.setEnabled(
             True
         )
@@ -1565,6 +1644,8 @@ class MainWindow(QMainWindow):
         self.mavlink_label.setText(
             "MAVLink: DISCONNECTED"
         )
+
+        self._set_mavlink_led(False)
 
         if worker is not None:
 
@@ -1596,6 +1677,8 @@ class MainWindow(QMainWindow):
                 "MAVLink: CONNECTED"
             )
 
+            self._set_mavlink_led(True)
+
             self.live_frame.setEnabled(
                 True
             )
@@ -1610,6 +1693,12 @@ class MainWindow(QMainWindow):
 
         elif status == "STOPPED":
 
+            self._drone_armed = False
+
+            self._joystick_warned = False
+
+            self._set_arm_led(False)
+
             self.status_label.setText(
                 "Status: STOPPED"
             )
@@ -1617,6 +1706,8 @@ class MainWindow(QMainWindow):
             self.mavlink_label.setText(
                 "MAVLink: DISCONNECTED"
             )
+
+            self._set_mavlink_led(False)
 
             self.live_frame.setEnabled(
                 False
@@ -1635,6 +1726,12 @@ class MainWindow(QMainWindow):
             self.status_label.setText(
                 "Status: ERROR"
             )
+
+            self.mavlink_label.setText(
+                "MAVLink: ERROR"
+            )
+
+            self._set_mavlink_led(False)
 
             self.live_frame.setEnabled(
                 False
@@ -1798,6 +1895,10 @@ class MainWindow(QMainWindow):
 
             return
 
+        if not self._require_armed():
+
+            return
+
         self.worker.queue_command(
             "altitude",
             self.altitude_spin.value(),
@@ -1812,6 +1913,10 @@ class MainWindow(QMainWindow):
     ):
 
         if not self._worker_running():
+
+            return
+
+        if not self._require_armed():
 
             return
 
@@ -1832,6 +1937,10 @@ class MainWindow(QMainWindow):
 
             return
 
+        if not self._require_armed():
+
+            return
+
         self.worker.queue_command(
             "heading",
             self.heading_spin.value(),
@@ -1849,6 +1958,10 @@ class MainWindow(QMainWindow):
 
             return
 
+        if not self._require_armed():
+
+            return
+
         self.worker.queue_command(
             "latitude",
             self.latitude_spin.value(),
@@ -1863,6 +1976,10 @@ class MainWindow(QMainWindow):
     ):
 
         if not self._worker_running():
+
+            return
+
+        if not self._require_armed():
 
             return
 
@@ -1987,6 +2104,10 @@ class MainWindow(QMainWindow):
             "arm"
         )
 
+        self.status_label.setText(
+            "Status: ARMING..."
+        )
+
     # ========================================================
     # DISARM
     # ========================================================
@@ -1999,9 +2120,46 @@ class MainWindow(QMainWindow):
 
             return
 
+        if self._drone_alt > 0.05:
+
+            QMessageBox.warning(
+                self,
+                "Không thể DISARM",
+                "Drone đang bay có độ cao "
+                f"({self._drone_alt:.1f} m).\n"
+                "Vui lòng hạ cánh (LAND/RTL) trước khi DISARM.",
+            )
+
+            return
+
         self.worker.queue_command(
             "disarm"
         )
+
+        self.status_label.setText(
+            "Status: DISARMING..."
+        )
+
+    # ========================================================
+    # REQUIRE ARMED
+    # ========================================================
+
+    def _require_armed(
+        self,
+    ) -> bool:
+
+        if self._drone_armed:
+
+            return True
+
+        QMessageBox.warning(
+            self,
+            "Chưa ARM",
+            "Drone chưa được ARM.\n"
+            "Vui lòng bấm ARM trước khi thực hiện thao tác bay.",
+        )
+
+        return False
 
     # ========================================================
     # TAKEOFF
@@ -2015,9 +2173,17 @@ class MainWindow(QMainWindow):
 
             return
 
+        if not self._require_armed():
+
+            return
+
         self.worker.queue_command(
             "takeoff",
             self.altitude_spin.value(),
+        )
+
+        self.status_label.setText(
+            "Status: TAKEOFF..."
         )
 
     # ========================================================
@@ -2032,8 +2198,16 @@ class MainWindow(QMainWindow):
 
             return
 
+        if not self._require_armed():
+
+            return
+
         self.worker.queue_command(
             "land"
+        )
+
+        self.status_label.setText(
+            "Status: LANDING..."
         )
 
     # ========================================================
@@ -2048,8 +2222,32 @@ class MainWindow(QMainWindow):
 
             return
 
+        if not self._require_armed():
+
+            return
+
         self.worker.queue_command(
             "rtl"
+        )
+
+        self.status_label.setText(
+            "Status: RETURN TO HOME..."
+        )
+
+    def set_home_here(
+        self,
+    ):
+
+        if not self._worker_running():
+
+            return
+
+        self.worker.queue_command(
+            "set_home"
+        )
+
+        self.status_label.setText(
+            "Status: HOME POSITION SET"
         )
 
     # ========================================================
@@ -2066,9 +2264,104 @@ class MainWindow(QMainWindow):
 
             return
 
+        if not self._drone_armed:
+
+            if not self._joystick_warned:
+
+                self._joystick_warned = True
+
+                self._require_armed()
+
+            return
+
         self.worker.queue_command(
             command,
             value,
+        )
+
+    # ========================================================
+    # MAVLINK LED
+    # ========================================================
+
+    def _set_mavlink_led(
+        self,
+        connected,
+        connecting=False,
+    ):
+
+        if connecting:
+
+            color = "#e6b800"
+
+        elif connected:
+
+            color = "#2ecc71"
+
+        else:
+
+            color = "#e74c3c"
+
+        self.mavlink_led.setStyleSheet(
+            f"""
+            QLabel {{
+                background-color: {color};
+                border-radius: 7px;
+                border: 1px solid #00000033;
+            }}
+            """
+        )
+
+    # ========================================================
+    # ARM LED
+    # ========================================================
+
+    def _set_arm_led(
+        self,
+        armed,
+    ):
+
+        if armed:
+
+            color = "#2ecc71"
+
+            text = "ARMED"
+
+        else:
+
+            color = "#e74c3c"
+
+            text = "DISARMED"
+
+        self.arm_led.setStyleSheet(
+            f"""
+            QLabel {{
+                background-color: {color};
+                border-radius: 7px;
+                border: 1px solid #00000033;
+            }}
+            """
+        )
+
+        self.arm_label.setText(
+            text
+        )
+
+    # ========================================================
+    # TELEMETRY DEBUG
+    # ========================================================
+
+    def _on_telemetry_debug_toggled(
+        self,
+        enabled,
+    ):
+
+        if not self._worker_running():
+
+            return
+
+        self.worker.queue_command(
+            "telemetry_debug",
+            bool(enabled),
         )
 
     # ========================================================
@@ -2082,6 +2375,13 @@ class MainWindow(QMainWindow):
     ):
 
         if not self._worker_running():
+
+            return
+
+        if (
+            command == "start_mission"
+            and not self._require_armed()
+        ):
 
             return
 
@@ -2197,6 +2497,31 @@ class MainWindow(QMainWindow):
         self.telemetry_arm.setText(
             str(armed)
         )
+
+        if armed and not self._drone_armed:
+
+            self._joystick_warned = False
+
+        self._drone_armed = bool(
+            armed
+        )
+
+        self._set_arm_led(
+            self._drone_armed
+        )
+
+        try:
+
+            self._drone_alt = float(
+                alt
+            )
+
+        except (
+            TypeError,
+            ValueError,
+        ):
+
+            self._drone_alt = 0.0
 
         self.telemetry_lat.setText(
             self._format_float(
@@ -2654,6 +2979,8 @@ class MainWindow(QMainWindow):
         self.mavlink_label.setText(
             f"MAVLink ERROR: {message}"
         )
+
+        self._set_mavlink_led(False)
 
         self.live_frame.setEnabled(
             False

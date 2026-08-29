@@ -620,6 +620,47 @@ class MissionReceiver:
         )
 
     # ========================================================
+    # ACTION FOR COMMAND
+    #
+    # Maps a MAV_CMD to the Waypoint.action label so the GUI
+    # mission table can show what each step actually does
+    # (TAKEOFF / LAND / DELAY / RTL / WAYPOINT) instead of
+    # lumping every non-RTL item together as a plain waypoint.
+    # ========================================================
+
+    @staticmethod
+    def _action_for_command(command) -> str:
+
+        if command == mavutil.mavlink.MAV_CMD_NAV_RETURN_TO_LAUNCH:
+
+            return "rtl"
+
+        if command == mavutil.mavlink.MAV_CMD_NAV_TAKEOFF:
+
+            return "takeoff"
+
+        if command == mavutil.mavlink.MAV_CMD_NAV_LAND:
+
+            return "land"
+
+        if command == getattr(
+            mavutil.mavlink, "MAV_CMD_NAV_LOITER_TIME", 19
+        ):
+
+            # Loiter-for-a-duration at the current waypoint —
+            # the closest MAVLink equivalent to a plain "delay".
+            return "loiter"
+
+        if command in (
+            getattr(mavutil.mavlink, "MAV_CMD_NAV_DELAY", 93),
+            getattr(mavutil.mavlink, "MAV_CMD_CONDITION_DELAY", 112),
+        ):
+
+            return "delay"
+
+        return "waypoint"
+
+    # ========================================================
     # STORE INT ITEM
     # ========================================================
 
@@ -659,13 +700,18 @@ class MissionReceiver:
             mav_log.info(RX, f"DO_CHANGE_SPEED -> {self.pending_speed:.2f} m/s")
             return True
 
+        delay_commands = {
+            getattr(mavutil.mavlink, "MAV_CMD_NAV_DELAY", 93),
+            getattr(mavutil.mavlink, "MAV_CMD_CONDITION_DELAY", 112),
+        }
+
         supported_commands = {
             mavutil.mavlink.MAV_CMD_NAV_WAYPOINT,
             mavutil.mavlink.MAV_CMD_NAV_TAKEOFF,
             mavutil.mavlink.MAV_CMD_NAV_LAND,
             getattr(mavutil.mavlink, "MAV_CMD_NAV_LOITER_TIME", 19),
             mavutil.mavlink.MAV_CMD_NAV_RETURN_TO_LAUNCH,
-        }
+        } | delay_commands
 
         if command not in supported_commands:
 
@@ -685,6 +731,8 @@ class MissionReceiver:
             == mavutil.mavlink.MAV_CMD_NAV_RETURN_TO_LAUNCH
         )
 
+        is_delay = command in delay_commands
+
         if is_rtl:
 
             home = self._resolve_home()
@@ -698,6 +746,20 @@ class MissionReceiver:
             longitude = home["lon"]
 
             altitude = home["alt"]
+
+        elif is_delay:
+
+            position = self._resolve_delay_position()
+
+            if position is None:
+
+                return False
+
+            latitude = position["lat"]
+
+            longitude = position["lon"]
+
+            altitude = position["alt"]
 
         else:
 
@@ -828,12 +890,12 @@ class MissionReceiver:
                 name=(
                     "RTL"
                     if is_rtl
+                    else "DELAY"
+                    if is_delay
                     else f"WP{sequence + 1}"
                 ),
-                action=(
-                    "rtl"
-                    if is_rtl
-                    else "waypoint"
+                action=self._action_for_command(
+                    command
                 ),
                 command=command,
                 acceptance_radius=acceptance_radius or 0.0,
@@ -929,13 +991,18 @@ class MissionReceiver:
             mav_log.info(RX, f"DO_CHANGE_SPEED -> {self.pending_speed:.2f} m/s")
             return True
 
+        delay_commands = {
+            getattr(mavutil.mavlink, "MAV_CMD_NAV_DELAY", 93),
+            getattr(mavutil.mavlink, "MAV_CMD_CONDITION_DELAY", 112),
+        }
+
         supported_commands = {
             mavutil.mavlink.MAV_CMD_NAV_WAYPOINT,
             mavutil.mavlink.MAV_CMD_NAV_TAKEOFF,
             mavutil.mavlink.MAV_CMD_NAV_LAND,
             getattr(mavutil.mavlink, "MAV_CMD_NAV_LOITER_TIME", 19),
             mavutil.mavlink.MAV_CMD_NAV_RETURN_TO_LAUNCH,
-        }
+        } | delay_commands
 
         if command not in supported_commands:
 
@@ -947,6 +1014,8 @@ class MissionReceiver:
             command
             == mavutil.mavlink.MAV_CMD_NAV_RETURN_TO_LAUNCH
         )
+
+        is_delay = command in delay_commands
 
         if is_rtl:
 
@@ -961,6 +1030,20 @@ class MissionReceiver:
             longitude = home["lon"]
 
             altitude = home["alt"]
+
+        elif is_delay:
+
+            position = self._resolve_delay_position()
+
+            if position is None:
+
+                return False
+
+            latitude = position["lat"]
+
+            longitude = position["lon"]
+
+            altitude = position["alt"]
 
         else:
 
@@ -1018,12 +1101,12 @@ class MissionReceiver:
                 name=(
                     "RTL"
                     if is_rtl
+                    else "DELAY"
+                    if is_delay
                     else f"WP{sequence + 1}"
                 ),
-                action=(
-                    "rtl"
-                    if is_rtl
-                    else "waypoint"
+                action=self._action_for_command(
+                    command
                 ),
                 command=command,
                 acceptance_radius=max(0.0, float(getattr(message, "param2", 0.0))),
@@ -1066,6 +1149,33 @@ class MissionReceiver:
         except Exception:
 
             return None
+
+    # ========================================================
+    # DELAY POSITION
+    #
+    # MAV_CMD_NAV_DELAY (and _CONDITION_DELAY) items don't carry
+    # a real target — GCS tools like Mission Planner send x=y=z=0
+    # since the drone should simply pause where it already is.
+    # Anchor the delay to the previous waypoint's position (or
+    # home, if this is the first item) so the mission doesn't
+    # jump anywhere for it.
+    # ========================================================
+
+    def _resolve_delay_position(
+        self,
+    ):
+
+        if self.staging_mission.waypoints:
+
+            last = self.staging_mission.waypoints[-1]
+
+            return {
+                "lat": float(last.latitude),
+                "lon": float(last.longitude),
+                "alt": float(last.altitude),
+            }
+
+        return self._resolve_home()
 
     # ========================================================
     # ALTITUDE
