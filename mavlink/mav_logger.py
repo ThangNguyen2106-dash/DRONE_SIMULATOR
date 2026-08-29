@@ -121,7 +121,13 @@ class MavLogger:
             category: True for category in ALL_CATEGORIES
         }
 
-        self.use_color = sys.stdout.isatty()
+        # sys.stdout is None in a windowed/noconsole PyInstaller
+        # build (no console attached), which would crash
+        # .isatty() right here at import time.
+        self.use_color = (
+            sys.stdout is not None
+            and sys.stdout.isatty()
+        )
 
         self._file = None
         self._file_path: Optional[str] = None

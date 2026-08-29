@@ -25,14 +25,36 @@ from gui.mavlink_config_panel import MAVLinkConfigPanel
 from gui.joystick_panel import JoystickPanel
 from gui.mission_panel import MissionPanel
 from core.version_check import check_for_update, pull_latest
+from core.update_check import check_github_release
+from core.app_version import __version__ as APP_VERSION
+
+
+# GitHub project used for the packaged-build (.exe) update
+# check — no .git checkout to read a remote from in that case,
+# so this has to be hardcoded.
+_GITHUB_OWNER = "ThangNguyen2106-dash"
+_GITHUB_REPO = "DRONE_SIMULATOR"
 
 
 # ============================================================
 # VERSION CHECK THREAD
 #
-# git ls-remote can block on network I/O, so the check runs
-# off the GUI thread and reports back through a signal instead
-# of ever touching widgets directly.
+# Network/git I/O can block, so the check runs off the GUI
+# thread and reports back through a signal instead of ever
+# touching widgets directly.
+#
+# Two independent methods, picked by whether this is a source
+# checkout or a packaged build:
+#
+#   - .git directory present (running from source):
+#     compare local HEAD vs origin's commit for the current
+#     branch, auto `git pull --ff-only` when behind.
+#
+#   - no .git directory (PyInstaller .exe, or files copied
+#     without history): compare the version baked into
+#     core/app_version.py against the latest GitHub Release
+#     tag. Can only point the user at the download page — an
+#     exe can't safely overwrite itself while running.
 # ============================================================
 
 class _VersionCheckThread(QThread):
@@ -47,9 +69,40 @@ class _VersionCheckThread(QThread):
 
     def run(self):
 
+        import os
+
+        is_git_checkout = os.path.isdir(
+            os.path.join(
+                self.repo_dir,
+                ".git",
+            )
+        )
+
+        if is_git_checkout:
+
+            result = self._check_git()
+
+        else:
+
+            result = check_github_release(
+                _GITHUB_OWNER,
+                _GITHUB_REPO,
+                APP_VERSION,
+            )
+
+            result["method"] = "release"
+
+        self.result_ready.emit(
+            result
+        )
+
+    def _check_git(self):
+
         result = check_for_update(
             self.repo_dir
         )
+
+        result["method"] = "git"
 
         # Outdated: try to fast-forward automatically before
         # reporting back, so a plain restart is enough to pick
@@ -76,11 +129,11 @@ class _VersionCheckThread(QThread):
                     self.repo_dir
                 )
 
+                result["method"] = "git"
+
                 result["pulled"] = True
 
-        self.result_ready.emit(
-            result
-        )
+        return result
 
 
 # ============================================================
@@ -293,6 +346,8 @@ class MainWindow(QMainWindow):
 
         status = result.get("status")
 
+        method = result.get("method")
+
         branch = result.get("branch") or "?"
 
         local = result.get("local") or "?"
@@ -301,11 +356,24 @@ class MainWindow(QMainWindow):
 
         pulled = result.get("pulled")
 
+        url = result.get("url")
+
         print(
             "[VERSION CHECK] "
-            f"status={status} pulled={pulled} branch={branch} "
-            f"local={local} remote={remote}"
+            f"method={method} status={status} pulled={pulled} "
+            f"branch={branch} local={local} remote={remote}"
         )
+
+        if method == "release":
+
+            self._on_release_check_result(
+                status,
+                local,
+                remote,
+                url,
+            )
+
+            return
 
         if pulled:
 
@@ -359,6 +427,60 @@ class MainWindow(QMainWindow):
 
         self.version_label.setText(
             "v.? (không kiểm tra được)"
+        )
+
+    def _on_release_check_result(
+        self,
+        status,
+        local,
+        remote,
+        url,
+    ):
+
+        if status == "outdated":
+
+            self.version_label.setText(
+                f"v.{local} (có bản mới: v.{remote})"
+            )
+
+            message = (
+                "Bạn đang chạy bản cũ của simulator.\n\n"
+                f"Bản đang chạy: v.{local}\n"
+                f"Bản mới nhất: v.{remote}\n\n"
+            )
+
+            if url:
+
+                message += f"Tải bản mới tại:\n{url}"
+
+            else:
+
+                message += (
+                    "Vào trang Releases trên GitHub để tải "
+                    "bản mới."
+                )
+
+            QMessageBox.information(
+                self,
+                "Có bản cập nhật mới",
+                message,
+            )
+
+            return
+
+        if status == "up_to_date":
+
+            self.version_label.setText(
+                f"v.{local} (mới nhất)"
+            )
+
+            return
+
+        # "unknown": offline, GitHub API unreachable/rate
+        # limited, or no release published yet.
+
+        self.version_label.setText(
+            f"v.{local} (không kiểm tra được)"
         )
 
     # ========================================================

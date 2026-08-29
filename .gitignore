@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+
+# PyInstaller build output — rebuild locally with the command
+# in HUONG_DAN_SU_DUNG.md instead of committing binaries here.
+build/
+dist/
+*.spec
+
+.venv/
+venv/
