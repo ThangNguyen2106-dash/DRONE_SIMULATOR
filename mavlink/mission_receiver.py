@@ -620,6 +620,67 @@ class MissionReceiver:
         )
 
     # ========================================================
+    # COMMAND SETS
+    #
+    # NAV_POSITION_COMMANDS carry a real lat/lon/alt target and
+    # get inserted as a flyable Waypoint. NOOP_COMMANDS are
+    # accessory DO_*/CONDITION_* items Mission Planner may add
+    # to a mission (camera, servo, ROI, jump, fencing, ...) that
+    # this simulator has no physical model for — they're ACKed
+    # as accepted (so the whole mission still uploads) but don't
+    # produce a waypoint or affect navigation.
+    # ========================================================
+
+    @staticmethod
+    def _nav_position_commands():
+
+        mav = mavutil.mavlink
+
+        return {
+            mav.MAV_CMD_NAV_WAYPOINT,
+            mav.MAV_CMD_NAV_TAKEOFF,
+            mav.MAV_CMD_NAV_LAND,
+            mav.MAV_CMD_NAV_RETURN_TO_LAUNCH,
+            getattr(mav, "MAV_CMD_NAV_SPLINE_WAYPOINT", 82),
+            getattr(mav, "MAV_CMD_NAV_LOITER_UNLIM", 17),
+            getattr(mav, "MAV_CMD_NAV_LOITER_TURNS", 18),
+            getattr(mav, "MAV_CMD_NAV_LOITER_TIME", 19),
+            getattr(mav, "MAV_CMD_NAV_DELAY", 93),
+            getattr(mav, "MAV_CMD_CONDITION_DELAY", 112),
+        }
+
+    @staticmethod
+    def _noop_commands():
+
+        mav = mavutil.mavlink
+
+        return {
+            getattr(mav, "MAV_CMD_CONDITION_YAW", 115),
+            getattr(mav, "MAV_CMD_DO_JUMP", 177),
+            getattr(mav, "MAV_CMD_DO_SET_HOME", 179),
+            getattr(mav, "MAV_CMD_DO_SET_RELAY", 181),
+            getattr(mav, "MAV_CMD_DO_REPEAT_RELAY", 182),
+            getattr(mav, "MAV_CMD_DO_SET_SERVO", 183),
+            getattr(mav, "MAV_CMD_DO_REPEAT_SERVO", 184),
+            getattr(mav, "MAV_CMD_DO_LAND_START", 189),
+            getattr(mav, "MAV_CMD_DO_FENCE_ENABLE", 207),
+            getattr(mav, "MAV_CMD_DO_PARACHUTE", 208),
+            getattr(mav, "MAV_CMD_DO_INVERTED_FLIGHT", 210),
+            getattr(mav, "MAV_CMD_DO_GRIPPER", 211),
+            getattr(mav, "MAV_CMD_DO_GUIDED_LIMITS", 222),
+            getattr(mav, "MAV_CMD_DO_ENGINE_CONTROL", 223),
+            getattr(mav, "MAV_CMD_DO_SET_ROI", 201),
+            getattr(mav, "MAV_CMD_DO_SET_ROI_LOCATION", 195),
+            getattr(mav, "MAV_CMD_DO_SET_ROI_NONE", 197),
+            getattr(mav, "MAV_CMD_DO_DIGICAM_CONFIGURE", 202),
+            getattr(mav, "MAV_CMD_DO_DIGICAM_CONTROL", 203),
+            getattr(mav, "MAV_CMD_DO_MOUNT_CONTROL", 205),
+            getattr(mav, "MAV_CMD_DO_SET_CAM_TRIGG_DIST", 206),
+            getattr(mav, "MAV_CMD_DO_VTOL_TRANSITION", 3000),
+            getattr(mav, "MAV_CMD_DO_AUTOTUNE_ENABLE", 211),
+        }
+
+    # ========================================================
     # ACTION FOR COMMAND
     #
     # Maps a MAV_CMD to the Waypoint.action label so the GUI
@@ -700,18 +761,18 @@ class MissionReceiver:
             mav_log.info(RX, f"DO_CHANGE_SPEED -> {self.pending_speed:.2f} m/s")
             return True
 
+        if command in self._noop_commands():
+
+            mav_log.info(RX, f"Accepted no-op command={command}")
+
+            return True
+
         delay_commands = {
             getattr(mavutil.mavlink, "MAV_CMD_NAV_DELAY", 93),
             getattr(mavutil.mavlink, "MAV_CMD_CONDITION_DELAY", 112),
         }
 
-        supported_commands = {
-            mavutil.mavlink.MAV_CMD_NAV_WAYPOINT,
-            mavutil.mavlink.MAV_CMD_NAV_TAKEOFF,
-            mavutil.mavlink.MAV_CMD_NAV_LAND,
-            getattr(mavutil.mavlink, "MAV_CMD_NAV_LOITER_TIME", 19),
-            mavutil.mavlink.MAV_CMD_NAV_RETURN_TO_LAUNCH,
-        } | delay_commands
+        supported_commands = self._nav_position_commands()
 
         if command not in supported_commands:
 
@@ -991,18 +1052,18 @@ class MissionReceiver:
             mav_log.info(RX, f"DO_CHANGE_SPEED -> {self.pending_speed:.2f} m/s")
             return True
 
+        if command in self._noop_commands():
+
+            mav_log.info(RX, f"Accepted no-op command={command}")
+
+            return True
+
         delay_commands = {
             getattr(mavutil.mavlink, "MAV_CMD_NAV_DELAY", 93),
             getattr(mavutil.mavlink, "MAV_CMD_CONDITION_DELAY", 112),
         }
 
-        supported_commands = {
-            mavutil.mavlink.MAV_CMD_NAV_WAYPOINT,
-            mavutil.mavlink.MAV_CMD_NAV_TAKEOFF,
-            mavutil.mavlink.MAV_CMD_NAV_LAND,
-            getattr(mavutil.mavlink, "MAV_CMD_NAV_LOITER_TIME", 19),
-            mavutil.mavlink.MAV_CMD_NAV_RETURN_TO_LAUNCH,
-        } | delay_commands
+        supported_commands = self._nav_position_commands()
 
         if command not in supported_commands:
 
