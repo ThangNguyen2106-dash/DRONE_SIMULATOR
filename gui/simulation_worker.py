@@ -59,6 +59,8 @@ class SimulationWorker(QThread):
 
     error_occurred = Signal(str)
 
+    mission_updated = Signal(dict)
+
     # ========================================================
     # INIT
     # ========================================================
@@ -116,6 +118,8 @@ class SimulationWorker(QThread):
         self.mission_receiver = None
 
         self.command_receiver = None
+
+        self._last_mission_snapshot = None
 
         # ====================================================
         # RUNTIME STATUS
@@ -351,6 +355,46 @@ class SimulationWorker(QThread):
                 print(
                     "[RUNTIME] ALTITUDE FAILED"
                 )
+
+            return
+
+        # ====================================================
+        # BODY VELOCITY (JOYSTICK TILT CONTROL)
+        # ====================================================
+
+        if command == "body_velocity":
+
+            if not isinstance(
+                value,
+                dict,
+            ):
+
+                return
+
+            self.drone.set_body_velocity(
+                forward=value.get(
+                    "forward",
+                    0.0,
+                ),
+                lateral=value.get(
+                    "lateral",
+                    0.0,
+                ),
+            )
+
+            return
+
+        # ====================================================
+        # RELEASE BODY VELOCITY CONTROL
+        # ====================================================
+
+        if command == "release_body_control":
+
+            self.drone.release_body_control()
+
+            print(
+                "[RUNTIME] Body tilt control released"
+            )
 
             return
 
@@ -723,6 +767,20 @@ class SimulationWorker(QThread):
             return
 
         # ====================================================
+        # TELEMETRY DEBUG VERBOSE
+        # ====================================================
+
+        if command == "telemetry_debug":
+
+            if self.telemetry is not None:
+
+                self.telemetry.set_debug_verbose(
+                    bool(value)
+                )
+
+            return
+
+        # ====================================================
         # ARM
         # ====================================================
 
@@ -811,10 +869,118 @@ class SimulationWorker(QThread):
             return
 
         # ====================================================
+        # SET HOME = CURRENT POSITION
+        # ====================================================
+
+        if command == "set_home":
+
+            self.drone.set_home_here()
+
+            print(
+                "[RUNTIME] HOME SET TO CURRENT POSITION"
+            )
+
+            return
+
+        # ====================================================
+        # ADD WAYPOINT
+        # ====================================================
+
+        if command == "add_waypoint":
+
+            if not isinstance(
+                value,
+                dict,
+            ):
+
+                return
+
+            action = value.get(
+                "action",
+                "waypoint",
+            )
+
+            latitude = value.get("latitude")
+            longitude = value.get("longitude")
+            altitude = value.get("altitude")
+
+            if action == "rtl":
+
+                home = self.drone.get_home_position()
+
+                latitude = home["lat"]
+                longitude = home["lon"]
+                altitude = home["alt"]
+
+            waypoint = (
+                self.drone.mission.add_waypoint(
+                    latitude=latitude,
+                    longitude=longitude,
+                    altitude=altitude,
+                    speed=value.get(
+                        "speed",
+                        5.0,
+                    ),
+                    hold_time=value.get(
+                        "hold_time",
+                        0.0,
+                    ),
+                    name=value.get(
+                        "name",
+                        "RTL" if action == "rtl" else "",
+                    ),
+                    action=action,
+                    command=value.get(
+                        "command",
+                        {
+                            "rtl": 20,
+                            "takeoff": 22,
+                            "land": 21,
+                            "loiter": 19,
+                            "delay": 93,
+                        }.get(action, 16),
+                    ),
+                )
+            )
+
+            print(
+                "[RUNTIME] WAYPOINT ADDED -> "
+                f"#{waypoint.index} "
+                f"{waypoint.latitude:.7f}, "
+                f"{waypoint.longitude:.7f}, "
+                f"{waypoint.altitude:.1f}m"
+            )
+
+            return
+
+        # ====================================================
+        # CLEAR MISSION
+        # ====================================================
+
+        if command == "clear_mission":
+
+            self.drone.mission.clear()
+
+            print(
+                "[RUNTIME] MISSION CLEARED"
+            )
+
+            return
+
+        # ====================================================
         # START MISSION
         # ====================================================
 
         if command == "start_mission":
+
+            # The joystick panel keeps sending body_velocity
+            # (even at zero) as long as it's enabled, which
+            # locks the flight model into body-frame control
+            # and blocks the mission's target_speed/heading
+            # autopilot. Hand horizontal control back before
+            # flying the mission.
+
+            self.drone.release_body_control()
 
             result = (
                 self.drone.start_mission()
@@ -823,6 +989,53 @@ class SimulationWorker(QThread):
             print(
                 "[RUNTIME] START MISSION -> "
                 f"{result}"
+            )
+
+            return
+
+        # ====================================================
+        # SET MISSION SPEED
+        #
+        # Applies to every waypoint currently in the mission,
+        # including the one being flown right now.
+        # ====================================================
+
+        if command == "set_mission_speed":
+
+            try:
+
+                speed = max(
+                    0.0,
+                    float(value),
+                )
+
+            except Exception:
+
+                return
+
+            for waypoint in (
+                self.drone.mission.get_all()
+            ):
+
+                waypoint.speed = speed
+
+            current_waypoint = (
+                self.drone.mission
+                .get_current_waypoint()
+            )
+
+            if (
+                current_waypoint is not None
+                and self.drone.mission_navigator.is_active()
+            ):
+
+                self.drone.flight_model.set_target_speed(
+                    speed
+                )
+
+            print(
+                "[RUNTIME] MISSION SPEED -> "
+                f"{speed:.1f} m/s"
             )
 
             return
@@ -1046,6 +1259,11 @@ class SimulationWorker(QThread):
             )
 
             print(
+                f"[MAVLINK] Protocol      : "
+                f"{self.mavlink_config.get('connection_type', 'UDP')}"
+            )
+
+            print(
                 f"[MAVLINK] TX -> GCS     : "
                 f"{tx_host}:{tx_port}"
             )
@@ -1071,9 +1289,43 @@ class SimulationWorker(QThread):
                 "[SIM] Creating MAVLink connection..."
             )
 
-            connection_string = (
-                f"udp:{tx_host}:{tx_port}"
-            )
+            connection_type = str(
+                self.mavlink_config.get(
+                    "connection_type",
+                    "UDP",
+                )
+            ).strip().lower()
+
+            if connection_type == "serial":
+
+                serial_device = str(
+                    self.mavlink_config.get(
+                        "serial_device",
+                        "COM3",
+                    )
+                ).strip()
+
+                baudrate = self._get_int(
+                    self.mavlink_config,
+                    "baudrate",
+                    57600,
+                )
+
+                connection_string = (
+                    f"serial:{serial_device}:{baudrate}"
+                )
+
+            else:
+
+                protocol = (
+                    "tcp"
+                    if connection_type == "tcp"
+                    else "udp"
+                )
+
+                connection_string = (
+                    f"{protocol}:{tx_host}:{tx_port}"
+                )
 
             self.mavlink = MAVLinkConnection(
                 connection_string=connection_string,
@@ -1102,6 +1354,7 @@ class SimulationWorker(QThread):
                 mission=self.drone.mission,
                 system_id=system_id,
                 component_id=component_id,
+                get_home_position=self.drone.get_home_position,
             )
 
             print(
@@ -1139,6 +1392,13 @@ class SimulationWorker(QThread):
                 connection=self.mavlink,
                 system_id=system_id,
                 component_id=component_id,
+            )
+
+            self.telemetry.debug_verbose = bool(
+                self.mavlink_config.get(
+                    "debug_verbose",
+                    False,
+                )
             )
 
             print(
@@ -1273,6 +1533,12 @@ class SimulationWorker(QThread):
                 # ==================================================
 
                 self._process_mavlink_messages()
+
+                # ==================================================
+                # MISSION TABLE SYNC
+                # ==================================================
+
+                self._sync_mission_table()
 
                 # ==================================================
                 # DRONE PHYSICS
@@ -1481,10 +1747,21 @@ class SimulationWorker(QThread):
 
                 continue
 
-            print(
-                f"[MAVLINK RX] "
-                f"{message_type}"
-            )
+            # ------------------------------------------------
+            # Skip logging high-frequency, low-value chatter
+            # (GCS heartbeats and stream requests can arrive
+            # several times per second and drown the console).
+            # ------------------------------------------------
+
+            if message_type not in (
+                "HEARTBEAT",
+                "REQUEST_DATA_STREAM",
+            ):
+
+                print(
+                    f"[MAVLINK RX] "
+                    f"{message_type}"
+                )
 
             # =================================================
             # MISSION
@@ -1546,6 +1823,66 @@ class SimulationWorker(QThread):
                         f"{type(exc).__name__}: "
                         f"{exc}"
                     )
+
+    # ========================================================
+    # MISSION TABLE SYNC
+    #
+    # Emits the current waypoint list whenever it changes,
+    # so the GUI mission table stays in sync with missions
+    # uploaded from an external GCS (e.g. Mission Planner /
+    # QGroundControl), not only ones added from the GUI.
+    # ========================================================
+
+    def _sync_mission_table(self):
+
+        if self.drone is None:
+
+            return
+
+        try:
+
+            waypoints = (
+                self.drone.mission.get_all()
+            )
+
+        except Exception:
+
+            return
+
+        waypoint_list = [
+            {
+                "index": wp.index,
+                "name": wp.name,
+                "action": wp.action,
+                "latitude": wp.latitude,
+                "longitude": wp.longitude,
+                "altitude": wp.altitude,
+                "speed": wp.speed,
+                "hold_time": wp.hold_time,
+            }
+            for wp in waypoints
+        ]
+
+        snapshot = {
+            "waypoints": waypoint_list,
+            "current_index": (
+                self.drone.mission.get_current_index()
+            ),
+            "active": (
+                self.drone.mission_navigator.is_active()
+            ),
+            "finished": (
+                self.drone.mission.is_finished()
+            ),
+        }
+
+        if snapshot == self._last_mission_snapshot:
+
+            return
+
+        self._last_mission_snapshot = snapshot
+
+        self.mission_updated.emit(snapshot)
 
     # ========================================================
     # CONFIG HELPERS

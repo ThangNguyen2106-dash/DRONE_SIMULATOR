@@ -7,7 +7,6 @@ from simulation.flight_model import FlightModel
 
 from simulator.mission import Mission
 from simulator.mission_navigator import MissionNavigator
-from simulator.camera import CameraSimulator
 
 
 # ============================================================
@@ -87,12 +86,6 @@ class Drone:
         # MISSION
         # ====================================================
 
-        self.camera = CameraSimulator(drone=self)
-        self.gimbal_pitch = 0.0
-        self.gimbal_yaw = 0.0
-        self.relays = {}
-        self.roi = None
-
         self.mission = Mission()
 
         self.mission_navigator = (
@@ -101,7 +94,6 @@ class Drone:
                 navigation=self.navigation,
             )
         )
-        self.mission_navigator.task_executor.drone = self
 
     # ========================================================
     # MODE
@@ -431,6 +423,91 @@ class Drone:
         return True
 
     # ========================================================
+    # SET BODY VELOCITY (JOYSTICK TILT CONTROL)
+    # ========================================================
+
+    def set_body_velocity(
+        self,
+        forward,
+        lateral,
+    ) -> bool:
+
+        try:
+
+            forward = float(
+                forward
+            )
+
+            lateral = float(
+                lateral
+            )
+
+        except (
+            TypeError,
+            ValueError,
+        ):
+
+            return False
+
+        if not self.state.armed:
+
+            return False
+
+        # While a mission or RTL is actively navigating, don't
+        # let the joystick fully replace it (that's the old
+        # body_control_active behavior and would stall/derail
+        # the autopilot the instant the stick recenters to
+        # 0, 0 — every tick, since the panel keeps sending this
+        # continuously). Instead treat the stick as a small
+        # obstacle-avoidance nudge added on top of the
+        # autopilot's own velocity; RTL/mission keep navigating
+        # underneath it.
+        #
+        # Note: rtl() switches flight_mode back to FREE (it
+        # navigates via rtl_active + navigation.set_target, not
+        # a dedicated FlightMode), so rtl_active must be checked
+        # separately here.
+
+        autopilot_active = (
+            self.flight_mode == FlightMode.MISSION
+            or self.rtl_active
+        )
+
+        with self.state.lock:
+
+            if autopilot_active:
+
+                self.flight_model.set_nudge(
+                    forward,
+                    lateral,
+                )
+
+            else:
+
+                self.flight_model.set_body_velocity(
+                    forward,
+                    lateral,
+                )
+
+        return True
+
+    # ========================================================
+    # RELEASE BODY VELOCITY CONTROL
+    # ========================================================
+
+    def release_body_control(
+        self,
+    ) -> bool:
+
+        with self.state.lock:
+
+            self.flight_model.release_body_velocity()
+
+            self.flight_model.clear_nudge()
+
+        return True
+
+    # ========================================================
     # SET SPEED
     # ========================================================
 
@@ -453,6 +530,10 @@ class Drone:
             return False
 
         if speed < 0.0:
+
+            return False
+
+        if not self.state.armed:
 
             return False
 
@@ -488,6 +569,10 @@ class Drone:
 
         heading %= 360.0
 
+        if not self.state.armed:
+
+            return False
+
         with self.state.lock:
 
             self.flight_model.set_target_heading(
@@ -519,6 +604,10 @@ class Drone:
             return False
 
         if altitude < 0.0:
+
+            return False
+
+        if not self.state.armed:
 
             return False
 
@@ -905,7 +994,6 @@ class Drone:
         speed=5.0,
         hold_time=0.0,
         name="",
-        tasks=None,
     ):
 
         return self.mission.add_waypoint(
@@ -915,7 +1003,6 @@ class Drone:
             speed=speed,
             hold_time=hold_time,
             name=name,
-            tasks=tasks,
         )
 
     # ========================================================
@@ -1027,12 +1114,34 @@ class Drone:
         return True
 
     # ========================================================
+    # SET HOME = CURRENT POSITION
+    #
+    # home_lat/lon/alt are otherwise only set once, from the
+    # DRONE CONFIGURATION panel values at Drone construction —
+    # this lets the user re-anchor RTL's target to wherever the
+    # drone currently is, without stopping/restarting the sim.
+    # ========================================================
+
+    def set_home_here(
+        self,
+    ) -> bool:
+
+        with self.state.lock:
+
+            self.home_lat = self.state.lat
+
+            self.home_lon = self.state.lon
+
+            self.home_alt = self.state.alt
+
+        return True
+
+    # ========================================================
     # RTL
     # ========================================================
 
     def rtl(
         self,
-        from_mission: bool = False,
     ) -> bool:
 
         if not self.state.armed:
@@ -1042,13 +1151,20 @@ class Drone:
         with self.state.lock:
 
             # ------------------------------------------------
-            # Stop mission unless RTL is being launched by a
-            # mission terminal action. In that case the mission
-            # navigator will transfer control to RTL itself.
+            # Stop mission
             # ------------------------------------------------
 
-            if not from_mission:
-                self.mission_navigator.stop()
+            self.mission_navigator.stop()
+
+            # ------------------------------------------------
+            # Hand horizontal control back from a lingering
+            # joystick body_control_active (e.g. flown in FREE
+            # mode just before hitting RTL) — otherwise it fully
+            # overrides this RTL's target_speed/heading the
+            # instant the next flight_model.update() runs.
+            # ------------------------------------------------
+
+            self.flight_model.release_body_velocity()
 
             # ------------------------------------------------
             # Enable RTL
@@ -1104,6 +1220,20 @@ class Drone:
 
             return
 
+        # navigation.current_position is otherwise only kept
+        # up to date by MissionNavigator (during an active
+        # MISSION). RTL uses the same shared Navigation object
+        # but never refreshed it, so bearing/distance were
+        # computed against a stale (or, if no mission had ever
+        # run, default 0,0) position — sending RTL off in the
+        # wrong direction. Update it here every tick instead.
+
+        self.navigation.set_current_position(
+            lat=self.state.lat,
+            lon=self.state.lon,
+            alt=self.state.alt,
+        )
+
         result = (
             self.navigation
             .get_navigation_result()
@@ -1125,9 +1255,49 @@ class Drone:
                 result.bearing_deg
             )
 
+            # Slow down as the drone nears home instead of
+            # cruising at full speed right up to arrival_radius_m
+            # and then snapping to a stop.
+
+            rtl_cruise_speed = 5.0
+
+            deceleration_distance_m = 15.0
+
+            if result.distance_m < deceleration_distance_m:
+
+                speed_fraction = (
+                    (
+                        result.distance_m
+                        - self.navigation.arrival_radius_m
+                    )
+                    / (
+                        deceleration_distance_m
+                        - self.navigation.arrival_radius_m
+                    )
+                )
+
+                speed_fraction = max(
+                    0.0,
+                    min(
+                        1.0,
+                        speed_fraction,
+                    ),
+                )
+
+                rtl_speed = (
+                    rtl_cruise_speed * speed_fraction
+                )
+
+            else:
+
+                rtl_speed = rtl_cruise_speed
+
             self.flight_model.set_target_speed(
-                5.0
+                rtl_speed
             )
+
+            # Hold cruise altitude while flying back; only
+            # descend after arriving horizontally over home.
 
             self.flight_model.set_target_altitude(
                 self.state.alt
@@ -1143,8 +1313,12 @@ class Drone:
             0.0
         )
 
+        # Arrived over home: descend straight to the ground
+        # (0m) right away instead of home_alt, which is just
+        # the altitude the drone happened to be armed at.
+
         self.flight_model.set_target_altitude(
-            self.home_alt
+            0.0
         )
 
         self.state.mode = "LAND"
@@ -1155,7 +1329,6 @@ class Drone:
 
         altitude_error = abs(
             self.state.alt
-            - self.home_alt
         )
 
         if (
@@ -1168,7 +1341,7 @@ class Drone:
             )
 
             self.flight_model.set_target_altitude(
-                self.home_alt
+                0.0
             )
 
             self.rtl_active = False
@@ -1238,6 +1411,25 @@ class Drone:
         )
 
         if result is None:
+
+            return
+
+        # ----------------------------------------------------
+        # Holding at this waypoint (e.g. a DELAY item counting
+        # down): sit still instead of chasing a bearing that's
+        # jittery this close to the target, which was making
+        # the drone circle in place instead of stopping.
+        # ----------------------------------------------------
+
+        if self.mission_navigator.is_holding():
+
+            self.flight_model.set_target_speed(
+                0.0
+            )
+
+            self.flight_model.set_target_altitude(
+                waypoint.altitude
+            )
 
             return
 
@@ -1340,10 +1532,6 @@ class Drone:
                 dt,
             )
 
-            # Camera distance trigger runs after the flight model
-            # updates the position, so the travelled distance is real.
-            self.camera.update(sim_time=self.state.sim_time)
-
             # =================================================
             # BATTERY
             # =================================================
@@ -1379,6 +1567,12 @@ class Drone:
                 ):
 
                     self.state.mode = "HOLD"
+
+                    # Touching down from a commanded LAND/RTL
+                    # disarms automatically, so the next flight
+                    # requires an explicit ARM again.
+
+                    self.state.armed = False
 
                 if self.rtl_active:
 

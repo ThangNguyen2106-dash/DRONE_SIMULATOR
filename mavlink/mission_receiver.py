@@ -40,7 +40,7 @@ the project's MAVLink object is created as MAVLink(None).
 from pymavlink import mavutil
 
 from simulator.mission import Mission
-from simulator.mission_tasks import MissionTask
+from .mav_logger import mav_log, MISSION, TX, RX
 
 
 # ============================================================
@@ -55,6 +55,7 @@ class MissionReceiver:
         mission: Mission,
         system_id: int,
         component_id: int,
+        get_home_position=None,
     ):
 
         self.connection = connection
@@ -68,6 +69,11 @@ class MissionReceiver:
         self.component_id = int(
             component_id
         )
+
+        # Callable returning {"lat", "lon", "alt"} for the
+        # drone's home position, used to resolve
+        # MAV_CMD_NAV_RETURN_TO_LAUNCH mission items.
+        self.get_home_position = get_home_position
 
         # ====================================================
         # UPLOAD STATE
@@ -83,7 +89,6 @@ class MissionReceiver:
 
         # Mission-level speed command (MAV_CMD_DO_CHANGE_SPEED).
         self.pending_speed = 5.0
-        self.pending_tasks = []
 
         # ====================================================
         # STAGING MISSION
@@ -319,28 +324,17 @@ class MissionReceiver:
 
         except Exception as exc:
 
-            print(
-                "[MISSION TX ERROR] "
-                f"{description}: "
-                f"{type(exc).__name__}: "
-                f"{exc}"
-            )
+            mav_log.error(TX, f"{description}: {type(exc).__name__}: {exc}")
 
             return False
 
         if not result:
 
-            print(
-                "[MISSION TX FAILED] "
-                f"{description}"
-            )
+            mav_log.warn(TX, f"send failed: {description}")
 
             return False
 
-        print(
-            "[MISSION TX] "
-            f"{description}"
-        )
+        mav_log.debug(TX, description)
 
         return True
 
@@ -371,10 +365,7 @@ class MissionReceiver:
 
             return
 
-        print(
-            "[MISSION RX] "
-            f"MISSION_COUNT={count}"
-        )
+        mav_log.info(RX, f"MISSION_COUNT={count}")
 
         # ====================================================
         # EMPTY MISSION
@@ -398,9 +389,7 @@ class MissionReceiver:
                 mavutil.mavlink.MAV_MISSION_ACCEPTED
             )
 
-            print(
-                "[MISSION] Empty mission accepted"
-            )
+            mav_log.info(MISSION, "Empty mission accepted")
 
             return
 
@@ -414,10 +403,7 @@ class MissionReceiver:
                 mavutil.mavlink.MAV_MISSION_ERROR
             )
 
-            print(
-                "[MISSION] Mission rejected: "
-                f"too many items ({count})"
-            )
+            mav_log.warn(MISSION, f"Mission rejected: too many items ({count})")
 
             return
 
@@ -436,7 +422,6 @@ class MissionReceiver:
         self.received_count = 0
 
         self.pending_speed = 5.0
-        self.pending_tasks = []
 
         # New upload invalidates any download.
 
@@ -463,10 +448,7 @@ class MissionReceiver:
 
         if not self.upload_active:
 
-            print(
-                "[MISSION RX] "
-                "Unexpected MISSION_ITEM_INT"
-            )
+            mav_log.warn(RX, "Unexpected MISSION_ITEM_INT")
 
             return
 
@@ -482,10 +464,7 @@ class MissionReceiver:
 
         except Exception:
 
-            print(
-                "[MISSION RX] "
-                "Invalid MISSION_ITEM_INT seq"
-            )
+            mav_log.warn(RX, "Invalid MISSION_ITEM_INT seq")
 
             return
 
@@ -495,11 +474,7 @@ class MissionReceiver:
 
         if seq != self.expected_seq:
 
-            print(
-                "[MISSION RX] "
-                f"Unexpected seq={seq}, "
-                f"expected={self.expected_seq}"
-            )
+            mav_log.warn(RX, f"Unexpected seq={seq}, expected={self.expected_seq}")
 
             self._request_item(
                 self.expected_seq
@@ -565,10 +540,7 @@ class MissionReceiver:
 
         if not self.upload_active:
 
-            print(
-                "[MISSION RX] "
-                "Unexpected MISSION_ITEM"
-            )
+            mav_log.warn(RX, "Unexpected MISSION_ITEM")
 
             return
 
@@ -584,10 +556,7 @@ class MissionReceiver:
 
         except Exception:
 
-            print(
-                "[MISSION RX] "
-                "Invalid MISSION_ITEM seq"
-            )
+            mav_log.warn(RX, "Invalid MISSION_ITEM seq")
 
             return
 
@@ -651,79 +620,110 @@ class MissionReceiver:
         )
 
     # ========================================================
-    # STORE INT ITEM
+    # COMMAND SETS
+    #
+    # NAV_POSITION_COMMANDS carry a real lat/lon/alt target and
+    # get inserted as a flyable Waypoint. NOOP_COMMANDS are
+    # accessory DO_*/CONDITION_* items Mission Planner may add
+    # to a mission (camera, servo, ROI, jump, fencing, ...) that
+    # this simulator has no physical model for — they're ACKed
+    # as accepted (so the whole mission still uploads) but don't
+    # produce a waypoint or affect navigation.
     # ========================================================
 
-    def _store_task_command(self, command: int, message) -> bool:
-        """Convert MAVLink action commands into tasks for the NAV item they follow.
+    @staticmethod
+    def _nav_position_commands():
 
-        In a MAVLink mission, DO commands are normally placed immediately after
-        the NAV item they belong to. During upload the previous NAV item is
-        therefore the correct place to attach the action.
-        """
-        image_start = getattr(mavutil.mavlink, "MAV_CMD_IMAGE_START_CAPTURE", 2000)
-        image_stop = getattr(mavutil.mavlink, "MAV_CMD_IMAGE_STOP_CAPTURE", 2001)
-        cam_trigger = getattr(mavutil.mavlink, "MAV_CMD_DO_SET_CAM_TRIGG_DIST", 206)
-        servo = getattr(mavutil.mavlink, "MAV_CMD_DO_SET_SERVO", 183)
-        gimbal = getattr(mavutil.mavlink, "MAV_CMD_DO_GIMBAL_MANAGER_PITCHYAW", 1000)
-        rtl = getattr(mavutil.mavlink, "MAV_CMD_NAV_RETURN_TO_LAUNCH", 20)
-        relay = getattr(mavutil.mavlink, "MAV_CMD_DO_SET_RELAY", 181)
-        roi = getattr(mavutil.mavlink, "MAV_CMD_DO_SET_ROI", 201)
-        nav_delay = getattr(mavutil.mavlink, "MAV_CMD_NAV_DELAY", 93)
+        mav = mavutil.mavlink
 
-        task = None
-        if command == image_start:
-            task = MissionTask("PHOTO", {
-                "interval": float(getattr(message, "param2", 0.0)),
-                "count": int(max(1, getattr(message, "param3", 1))),
-            })
-        elif command == image_stop:
-            task = MissionTask("PHOTO_STOP")
-        elif command == cam_trigger:
-            task = MissionTask("CAMERA_TRIGGER_DISTANCE", {
-                "trigger_distance_m": float(getattr(message, "param1", 0.0)),
-            })
-        elif command == servo:
-            task = MissionTask("PAYLOAD_RELEASE", {
-                "servo": int(getattr(message, "param1", 0)),
-                "pwm": float(getattr(message, "param2", 0.0)),
-            })
-        elif command == gimbal:
-            task = MissionTask("GIMBAL", {
-                "pitch": float(getattr(message, "param1", 0.0)),
-                "yaw": float(getattr(message, "param2", 0.0)),
-            })
-        elif command == rtl:
-            task = MissionTask("RTL", {})
-        elif command == relay:
-            task = MissionTask("RELAY", {
-                "relay": int(getattr(message, "param1", 0)),
-                "state": int(getattr(message, "param2", 0)),
-            })
-        elif command == roi:
-            task = MissionTask("ROI", {
-                "roi_mode": int(getattr(message, "param1", 0)),
-                "latitude": float(getattr(message, "x", 0.0)) / 1e7,
-                "longitude": float(getattr(message, "y", 0.0)) / 1e7,
-                "altitude": float(getattr(message, "z", 0.0)),
-            })
-        elif command == nav_delay:
-            task = MissionTask("HOLD", {
-                "duration": max(0.0, float(getattr(message, "param1", 0.0)))
-            })
-        else:
-            return False
+        return {
+            mav.MAV_CMD_NAV_WAYPOINT,
+            mav.MAV_CMD_NAV_TAKEOFF,
+            mav.MAV_CMD_NAV_LAND,
+            mav.MAV_CMD_NAV_RETURN_TO_LAUNCH,
+            getattr(mav, "MAV_CMD_NAV_SPLINE_WAYPOINT", 82),
+            getattr(mav, "MAV_CMD_NAV_LOITER_UNLIM", 17),
+            getattr(mav, "MAV_CMD_NAV_LOITER_TURNS", 18),
+            getattr(mav, "MAV_CMD_NAV_LOITER_TIME", 19),
+            getattr(mav, "MAV_CMD_NAV_DELAY", 93),
+            getattr(mav, "MAV_CMD_CONDITION_DELAY", 112),
+        }
 
-        # Attach to the most recently received NAV item. If none exists yet,
-        # retain the old pending behavior so uploads remain tolerant.
-        if self.staging_mission.count() > 0:
-            wp = self.staging_mission.get_waypoint(self.staging_mission.count())
-            wp.tasks.append(task)
-            print(f"[MISSION RX] {task.task_type} attached to WP{wp.index}")
-        else:
-            self.pending_tasks.append(task)
-            print(f"[MISSION RX] {task.task_type} queued for next waypoint")
-        return True
+    @staticmethod
+    def _noop_commands():
+
+        mav = mavutil.mavlink
+
+        return {
+            getattr(mav, "MAV_CMD_CONDITION_YAW", 115),
+            getattr(mav, "MAV_CMD_DO_JUMP", 177),
+            getattr(mav, "MAV_CMD_DO_SET_HOME", 179),
+            getattr(mav, "MAV_CMD_DO_SET_RELAY", 181),
+            getattr(mav, "MAV_CMD_DO_REPEAT_RELAY", 182),
+            getattr(mav, "MAV_CMD_DO_SET_SERVO", 183),
+            getattr(mav, "MAV_CMD_DO_REPEAT_SERVO", 184),
+            getattr(mav, "MAV_CMD_DO_LAND_START", 189),
+            getattr(mav, "MAV_CMD_DO_FENCE_ENABLE", 207),
+            getattr(mav, "MAV_CMD_DO_PARACHUTE", 208),
+            getattr(mav, "MAV_CMD_DO_INVERTED_FLIGHT", 210),
+            getattr(mav, "MAV_CMD_DO_GRIPPER", 211),
+            getattr(mav, "MAV_CMD_DO_GUIDED_LIMITS", 222),
+            getattr(mav, "MAV_CMD_DO_ENGINE_CONTROL", 223),
+            getattr(mav, "MAV_CMD_DO_SET_ROI", 201),
+            getattr(mav, "MAV_CMD_DO_SET_ROI_LOCATION", 195),
+            getattr(mav, "MAV_CMD_DO_SET_ROI_NONE", 197),
+            getattr(mav, "MAV_CMD_DO_DIGICAM_CONFIGURE", 202),
+            getattr(mav, "MAV_CMD_DO_DIGICAM_CONTROL", 203),
+            getattr(mav, "MAV_CMD_DO_MOUNT_CONTROL", 205),
+            getattr(mav, "MAV_CMD_DO_SET_CAM_TRIGG_DIST", 206),
+            getattr(mav, "MAV_CMD_DO_VTOL_TRANSITION", 3000),
+            getattr(mav, "MAV_CMD_DO_AUTOTUNE_ENABLE", 211),
+        }
+
+    # ========================================================
+    # ACTION FOR COMMAND
+    #
+    # Maps a MAV_CMD to the Waypoint.action label so the GUI
+    # mission table can show what each step actually does
+    # (TAKEOFF / LAND / DELAY / RTL / WAYPOINT) instead of
+    # lumping every non-RTL item together as a plain waypoint.
+    # ========================================================
+
+    @staticmethod
+    def _action_for_command(command) -> str:
+
+        if command == mavutil.mavlink.MAV_CMD_NAV_RETURN_TO_LAUNCH:
+
+            return "rtl"
+
+        if command == mavutil.mavlink.MAV_CMD_NAV_TAKEOFF:
+
+            return "takeoff"
+
+        if command == mavutil.mavlink.MAV_CMD_NAV_LAND:
+
+            return "land"
+
+        if command == getattr(
+            mavutil.mavlink, "MAV_CMD_NAV_LOITER_TIME", 19
+        ):
+
+            # Loiter-for-a-duration at the current waypoint —
+            # the closest MAVLink equivalent to a plain "delay".
+            return "loiter"
+
+        if command in (
+            getattr(mavutil.mavlink, "MAV_CMD_NAV_DELAY", 93),
+            getattr(mavutil.mavlink, "MAV_CMD_CONDITION_DELAY", 112),
+        ):
+
+            return "delay"
+
+        return "waypoint"
+
+    # ========================================================
+    # STORE INT ITEM
+    # ========================================================
 
     def _store_mission_item_int(
         self,
@@ -758,73 +758,117 @@ class MissionReceiver:
                 self.pending_speed = max(0.0, float(message.param2))
             except Exception:
                 return False
-            print(f"[MISSION RX] DO_CHANGE_SPEED -> {self.pending_speed:.2f} m/s")
+            mav_log.info(RX, f"DO_CHANGE_SPEED -> {self.pending_speed:.2f} m/s")
             return True
 
-        if self._store_task_command(command, message):
+        if command in self._noop_commands():
+
+            mav_log.info(RX, f"Accepted no-op command={command}")
+
             return True
 
-        supported_commands = {
-            mavutil.mavlink.MAV_CMD_NAV_WAYPOINT,
-            mavutil.mavlink.MAV_CMD_NAV_TAKEOFF,
-            mavutil.mavlink.MAV_CMD_NAV_LAND,
-            getattr(mavutil.mavlink, "MAV_CMD_NAV_LOITER_TIME", 19),
+        delay_commands = {
+            getattr(mavutil.mavlink, "MAV_CMD_NAV_DELAY", 93),
+            getattr(mavutil.mavlink, "MAV_CMD_CONDITION_DELAY", 112),
         }
+
+        supported_commands = self._nav_position_commands()
 
         if command not in supported_commands:
 
-            print(
-                "[MISSION RX] "
-                f"Unsupported command={command}"
-            )
+            mav_log.warn(RX, f"Unsupported command={command}")
 
             return False
 
         # ====================================================
-        # GPS
+        # RETURN TO LAUNCH
+        #
+        # GCS usually sends x=y=z=0 for this item. The real
+        # target is the drone's home position.
         # ====================================================
 
-        try:
+        is_rtl = (
+            command
+            == mavutil.mavlink.MAV_CMD_NAV_RETURN_TO_LAUNCH
+        )
 
-            latitude = (
-                float(message.x)
-                / 10_000_000.0
-            )
+        is_delay = command in delay_commands
 
-            longitude = (
-                float(message.y)
-                / 10_000_000.0
-            )
+        if is_rtl:
 
-            altitude = (
-                self._resolve_altitude(
-                    message
+            home = self._resolve_home()
+
+            if home is None:
+
+                return False
+
+            latitude = home["lat"]
+
+            longitude = home["lon"]
+
+            altitude = home["alt"]
+
+        elif is_delay:
+
+            position = self._resolve_delay_position()
+
+            if position is None:
+
+                return False
+
+            latitude = position["lat"]
+
+            longitude = position["lon"]
+
+            altitude = position["alt"]
+
+        else:
+
+            # ================================================
+            # GPS
+            # ================================================
+
+            try:
+
+                latitude = (
+                    float(message.x)
+                    / 10_000_000.0
                 )
-            )
 
-        except Exception:
+                longitude = (
+                    float(message.y)
+                    / 10_000_000.0
+                )
 
-            return False
+                altitude = (
+                    self._resolve_altitude(
+                        message
+                    )
+                )
 
-        # ====================================================
-        # COORDINATE VALIDATION
-        # ====================================================
+            except Exception:
 
-        if not (
-            -90.0
-            <= latitude
-            <= 90.0
-        ):
+                return False
 
-            return False
+            # ================================================
+            # COORDINATE VALIDATION
+            # ================================================
 
-        if not (
-            -180.0
-            <= longitude
-            <= 180.0
-        ):
+            if not (
+                -90.0
+                <= latitude
+                <= 90.0
+            ):
 
-            return False
+                return False
+
+            if not (
+                -180.0
+                <= longitude
+                <= 180.0
+            ):
+
+                return False
 
         # ====================================================
         # HOLD TIME
@@ -904,17 +948,24 @@ class MissionReceiver:
                 altitude=altitude,
                 speed=speed,
                 hold_time=hold_time,
-                name=f"WP{sequence + 1}",
+                name=(
+                    "RTL"
+                    if is_rtl
+                    else "DELAY"
+                    if is_delay
+                    else f"WP{sequence + 1}"
+                ),
+                action=self._action_for_command(
+                    command
+                ),
                 command=command,
                 acceptance_radius=acceptance_radius or 0.0,
                 yaw=yaw or 0.0,
-                tasks=list(self.pending_tasks),
             )
         )
 
         # Preserve the original MAVLink sequence.
         waypoint.source_seq = sequence
-        self.pending_tasks.clear()
 
         # Store extra values when the waypoint object supports
         # them. This keeps compatibility with the existing
@@ -942,13 +993,10 @@ class MissionReceiver:
 
                 pass
 
-        print(
-            "[MISSION RX] "
-            f"WP{waypoint.index}: "
-            f"LAT={latitude:.7f} "
-            f"LON={longitude:.7f} "
-            f"ALT={altitude:.2f} "
-            f"HOLD={hold_time:.1f}s"
+        mav_log.info(
+            RX,
+            f"{waypoint.name}: LAT={latitude:.7f} LON={longitude:.7f} "
+            f"ALT={altitude:.2f} HOLD={hold_time:.1f}s",
         )
 
         return True
@@ -1001,47 +1049,84 @@ class MissionReceiver:
                 self.pending_speed = max(0.0, float(message.param2))
             except Exception:
                 return False
-            print(f"[MISSION RX] DO_CHANGE_SPEED -> {self.pending_speed:.2f} m/s")
+            mav_log.info(RX, f"DO_CHANGE_SPEED -> {self.pending_speed:.2f} m/s")
             return True
 
-        if self._store_task_command(command, message):
+        if command in self._noop_commands():
+
+            mav_log.info(RX, f"Accepted no-op command={command}")
+
             return True
 
-        supported_commands = {
-            mavutil.mavlink.MAV_CMD_NAV_WAYPOINT,
-            mavutil.mavlink.MAV_CMD_NAV_TAKEOFF,
-            mavutil.mavlink.MAV_CMD_NAV_LAND,
-            getattr(mavutil.mavlink, "MAV_CMD_NAV_LOITER_TIME", 19),
+        delay_commands = {
+            getattr(mavutil.mavlink, "MAV_CMD_NAV_DELAY", 93),
+            getattr(mavutil.mavlink, "MAV_CMD_CONDITION_DELAY", 112),
         }
+
+        supported_commands = self._nav_position_commands()
 
         if command not in supported_commands:
 
-            print(
-                "[MISSION RX] "
-                f"Unsupported command={command}"
-            )
+            mav_log.warn(RX, f"Unsupported command={command}")
 
             return False
 
-        # ====================================================
-        # VALIDATION
-        # ====================================================
+        is_rtl = (
+            command
+            == mavutil.mavlink.MAV_CMD_NAV_RETURN_TO_LAUNCH
+        )
 
-        if not (
-            -90.0
-            <= latitude
-            <= 90.0
-        ):
+        is_delay = command in delay_commands
 
-            return False
+        if is_rtl:
 
-        if not (
-            -180.0
-            <= longitude
-            <= 180.0
-        ):
+            home = self._resolve_home()
 
-            return False
+            if home is None:
+
+                return False
+
+            latitude = home["lat"]
+
+            longitude = home["lon"]
+
+            altitude = home["alt"]
+
+        elif is_delay:
+
+            position = self._resolve_delay_position()
+
+            if position is None:
+
+                return False
+
+            latitude = position["lat"]
+
+            longitude = position["lon"]
+
+            altitude = position["alt"]
+
+        else:
+
+            # ================================================
+            # VALIDATION
+            # ================================================
+
+            if not (
+                -90.0
+                <= latitude
+                <= 90.0
+            ):
+
+                return False
+
+            if not (
+                -180.0
+                <= longitude
+                <= 180.0
+            ):
+
+                return False
 
         # ====================================================
         # HOLD
@@ -1074,27 +1159,84 @@ class MissionReceiver:
                 altitude=altitude,
                 speed=max(0.0, float(self.pending_speed)),
                 hold_time=hold_time,
-                name=f"WP{sequence + 1}",
+                name=(
+                    "RTL"
+                    if is_rtl
+                    else "DELAY"
+                    if is_delay
+                    else f"WP{sequence + 1}"
+                ),
+                action=self._action_for_command(
+                    command
+                ),
                 command=command,
                 acceptance_radius=max(0.0, float(getattr(message, "param2", 0.0))),
                 yaw=float(getattr(message, "param4", 0.0)),
-                tasks=list(self.pending_tasks),
             )
         )
 
         waypoint.source_seq = sequence
-        self.pending_tasks.clear()
 
-        print(
-            "[MISSION RX] "
-            f"WP{waypoint.index}: "
-            f"LAT={latitude:.7f} "
-            f"LON={longitude:.7f} "
-            f"ALT={altitude:.2f} "
-            f"HOLD={hold_time:.1f}s"
+        mav_log.info(
+            RX,
+            f"{waypoint.name}: LAT={latitude:.7f} LON={longitude:.7f} "
+            f"ALT={altitude:.2f} HOLD={hold_time:.1f}s",
         )
 
         return True
+
+    # ========================================================
+    # HOME
+    # ========================================================
+
+    def _resolve_home(
+        self,
+    ):
+
+        if self.get_home_position is None:
+
+            return None
+
+        try:
+
+            home = self.get_home_position()
+
+            return {
+                "lat": float(home["lat"]),
+                "lon": float(home["lon"]),
+                "alt": float(home["alt"]),
+            }
+
+        except Exception:
+
+            return None
+
+    # ========================================================
+    # DELAY POSITION
+    #
+    # MAV_CMD_NAV_DELAY (and _CONDITION_DELAY) items don't carry
+    # a real target — GCS tools like Mission Planner send x=y=z=0
+    # since the drone should simply pause where it already is.
+    # Anchor the delay to the previous waypoint's position (or
+    # home, if this is the first item) so the mission doesn't
+    # jump anywhere for it.
+    # ========================================================
+
+    def _resolve_delay_position(
+        self,
+    ):
+
+        if self.staging_mission.waypoints:
+
+            last = self.staging_mission.waypoints[-1]
+
+            return {
+                "lat": float(last.latitude),
+                "lon": float(last.longitude),
+                "alt": float(last.altitude),
+            }
+
+        return self._resolve_home()
 
     # ========================================================
     # ALTITUDE
@@ -1175,11 +1317,7 @@ class MissionReceiver:
 
             return altitude
 
-        print(
-            "[MISSION RX] "
-            f"Unknown frame={frame}; "
-            f"using z={altitude}"
-        )
+        mav_log.warn(RX, f"Unknown frame={frame}; using z={altitude}")
 
         return altitude
 
@@ -1203,10 +1341,7 @@ class MissionReceiver:
 
         if mav is None:
 
-            print(
-                "[MISSION TX ERROR] "
-                "MAVLink encoder unavailable"
-            )
+            mav_log.error(TX, "MAVLink encoder unavailable")
 
             return False
 
@@ -1242,11 +1377,7 @@ class MissionReceiver:
 
             if encoder is None:
 
-                print(
-                    "[MISSION TX ERROR] "
-                    "mission_request_int_encode "
-                    "unavailable"
-                )
+                mav_log.error(TX, "mission_request_int_encode unavailable")
 
                 return False
 
@@ -1269,12 +1400,7 @@ class MissionReceiver:
 
         except Exception as exc:
 
-            print(
-                "[MISSION TX ERROR] "
-                "MISSION_REQUEST_INT encode: "
-                f"{type(exc).__name__}: "
-                f"{exc}"
-            )
+            mav_log.error(TX, f"MISSION_REQUEST_INT encode: {type(exc).__name__}: {exc}")
 
             return False
 
@@ -1328,7 +1454,6 @@ class MissionReceiver:
                     name=(
                         waypoint.name
                     ),
-                    tasks=list(getattr(waypoint, "tasks", []) or []),
                 )
             )
 
@@ -1339,6 +1464,7 @@ class MissionReceiver:
                 "yaw",
                 "command",
                 "source_seq",
+                "action",
             ):
 
                 if hasattr(
@@ -1379,15 +1505,7 @@ class MissionReceiver:
 
         self.download_index = 0
 
-        print(
-            "[MISSION] Upload complete"
-        )
-
-        print(
-            "[MISSION] "
-            f"{self.mission.count()} "
-            "waypoints accepted"
-        )
+        mav_log.info(MISSION, f"Upload complete: {self.mission.count()} waypoints accepted")
 
         # ====================================================
         # ACK
@@ -1423,13 +1541,10 @@ class MissionReceiver:
         self.download_index = 0
 
         self.staging_mission.clear()
-        self.pending_tasks = []
 
         self.mission.clear()
 
-        print(
-            "[MISSION] Mission cleared by GCS"
-        )
+        mav_log.info(MISSION, "Mission cleared by GCS")
 
         self._send_mission_ack(
             mavutil.mavlink.MAV_MISSION_ACCEPTED
@@ -1450,11 +1565,7 @@ class MissionReceiver:
 
         count = self.mission.count()
 
-        print(
-            "[MISSION RX] "
-            "MISSION_REQUEST_LIST "
-            f"count={count}"
-        )
+        mav_log.info(RX, f"MISSION_REQUEST_LIST count={count}")
 
         self.download_active = True
 
@@ -1582,12 +1693,7 @@ class MissionReceiver:
 
         except Exception as exc:
 
-            print(
-                "[MISSION TX ERROR] "
-                "MISSION_COUNT encode: "
-                f"{type(exc).__name__}: "
-                f"{exc}"
-            )
+            mav_log.error(TX, f"MISSION_COUNT encode: {type(exc).__name__}: {exc}")
 
             return False
 
@@ -1623,11 +1729,7 @@ class MissionReceiver:
 
         if waypoint is None:
 
-            print(
-                "[MISSION TX] "
-                f"Waypoint seq={sequence} "
-                "does not exist"
-            )
+            mav_log.warn(TX, f"Waypoint seq={sequence} does not exist")
 
             return False
 
@@ -1645,10 +1747,17 @@ class MissionReceiver:
             6,
         )
 
-        command = getattr(
-            mavutil.mavlink,
-            "MAV_CMD_NAV_WAYPOINT",
-            16,
+        command = int(
+            getattr(
+                waypoint,
+                "command",
+                None,
+            )
+            or getattr(
+                mavutil.mavlink,
+                "MAV_CMD_NAV_WAYPOINT",
+                16,
+            )
         )
 
         mission_type = getattr(
@@ -1721,11 +1830,7 @@ class MissionReceiver:
 
             if encoder is None:
 
-                print(
-                    "[MISSION TX ERROR] "
-                    "mission_item_int_encode "
-                    "unavailable"
-                )
+                mav_log.error(TX, "mission_item_int_encode unavailable")
 
                 return False
 
@@ -1770,12 +1875,7 @@ class MissionReceiver:
 
         except Exception as exc:
 
-            print(
-                "[MISSION TX ERROR] "
-                "MISSION_ITEM_INT encode: "
-                f"{type(exc).__name__}: "
-                f"{exc}"
-            )
+            mav_log.error(TX, f"MISSION_ITEM_INT encode: {type(exc).__name__}: {exc}")
 
             return False
 
@@ -1827,10 +1927,17 @@ class MissionReceiver:
             3,
         )
 
-        command = getattr(
-            mavutil.mavlink,
-            "MAV_CMD_NAV_WAYPOINT",
-            16,
+        command = int(
+            getattr(
+                waypoint,
+                "command",
+                None,
+            )
+            or getattr(
+                mavutil.mavlink,
+                "MAV_CMD_NAV_WAYPOINT",
+                16,
+            )
         )
 
         hold_time = float(
@@ -1898,12 +2005,7 @@ class MissionReceiver:
 
         except Exception as exc:
 
-            print(
-                "[MISSION TX ERROR] "
-                "MISSION_ITEM encode: "
-                f"{type(exc).__name__}: "
-                f"{exc}"
-            )
+            mav_log.error(TX, f"MISSION_ITEM encode: {type(exc).__name__}: {exc}")
 
             return False
 
@@ -1943,10 +2045,7 @@ class MissionReceiver:
 
         if waypoint is None:
 
-            print(
-                "[MISSION] "
-                f"Invalid waypoint sequence={sequence}"
-            )
+            mav_log.warn(MISSION, f"Invalid waypoint sequence={sequence}")
 
             return
 
@@ -1962,11 +2061,7 @@ class MissionReceiver:
 
         self.mission.finished = False
 
-        print(
-            "[MISSION] "
-            f"Current waypoint -> "
-            f"WP{sequence + 1}"
-        )
+        mav_log.info(MISSION, f"Current waypoint -> WP{sequence + 1}")
 
     # ========================================================
     # ACK
@@ -2028,11 +2123,7 @@ class MissionReceiver:
 
         except Exception as exc:
 
-            print(
-                "[MISSION ACK ERROR] "
-                f"{type(exc).__name__}: "
-                f"{exc}"
-            )
+            mav_log.error(MISSION, f"ACK encode: {type(exc).__name__}: {exc}")
 
             return False
 

@@ -2,6 +2,8 @@ import socket, threading, time, math, inspect
 from pymavlink.dialects.v20.ardupilotmega import MAVLink
 from pymavlink import mavutil
 
+from .mav_logger import mav_log, CONN, TX, RX, PARSE, COMMAND
+
 class MAVLinkServer:
     """Windows-safe MAVLink UDP server using raw UDP sockets and pymavlink encoders."""
     def __init__(self,state,tx_host='127.0.0.1',tx_port=14550,rx_host='0.0.0.0',rx_port=14551,rate_hz=20):
@@ -16,7 +18,7 @@ class MAVLinkServer:
     def start(self):
         if self.running:return
         self.running=True; self.s.running=True; self.thread=threading.Thread(target=self.loop,daemon=True,name='RIGEL-MAVLink'); self.thread.start()
-        print(f'[MAVLINK] TX -> {self.tx_host}:{self.tx_port} | RX <- {self.rx_host}:{self.rx_port}')
+        mav_log.info(CONN, f'TX -> {self.tx_host}:{self.tx_port} | RX <- {self.rx_host}:{self.rx_port}')
     def stop(self):
         self.running=False; self.s.running=False
         for sock in (self.rx,self.tx):
@@ -132,8 +134,8 @@ class MAVLinkServer:
 
     def send(self,msg):
         try:self.tx.sendto(msg.pack(self.mav),(self.tx_host,self.tx_port))
-        except OSError as e: print('[UDP TX ERROR]',repr(e))
-        except Exception as e: print('[MAVLINK TX ERROR]',type(e).__name__,e)
+        except OSError as e: mav_log.error(TX, f'UDP TX error: {e!r}')
+        except Exception as e: mav_log.error(TX, f'{type(e).__name__}: {e}')
 
     def heartbeat(self):
         with self.s.lock: armed=self.s.armed
@@ -144,7 +146,7 @@ class MAVLinkServer:
         names=['system_time','global_position_int','local_position_ned','attitude','vfr_hud','gps_raw_int','sys_status','battery_status','highres_imu','distance_sensor','rc_channels','nav_controller_output','extended_sys_state']
         for n in names:
             try:self.send(self._encode(n))
-            except Exception as e: print(f'[MAVLINK {n}] {type(e).__name__}: {e}')
+            except Exception as e: mav_log.error(TX, f'{n}: {type(e).__name__}: {e}')
 
     def receive(self):
         while True:
@@ -156,11 +158,11 @@ class MAVLinkServer:
                 try:
                     msg=self.parser.parse_char(bytes([b]))
                     if msg:self.handle(msg)
-                except Exception as e: print('[MAVLINK RX PARSE]',type(e).__name__,e)
+                except Exception as e: mav_log.error(PARSE, f'{type(e).__name__}: {e}')
 
     def ack(self,cmd,result=0):
         try:self.send(self._encode('command_ack',command=cmd,result=result))
-        except Exception as e:print('[ACK ERROR]',e)
+        except Exception as e: mav_log.error(COMMAND, f'ACK error: {e}')
 
     def handle(self,msg):
         t=msg.get_type(); s=self.s
@@ -192,5 +194,5 @@ class MAVLinkServer:
                 self.receive();hb+=dt
                 if hb>=1:self.heartbeat();hb=0
                 self.send_telemetry()
-            except Exception as e:print('[MAVLINK LOOP ERROR]',type(e).__name__,e)
+            except Exception as e: mav_log.error(CONN, f'loop error: {type(e).__name__}: {e}')
             time.sleep(max(0.005,1/self.rate))

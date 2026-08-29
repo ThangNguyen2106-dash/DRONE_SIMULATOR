@@ -13,7 +13,7 @@ def main():
 
     window = MainWindow()
 
-    window.show()
+    window.showMaximized()
 
     return app.exec()
 
