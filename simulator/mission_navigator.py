@@ -2,9 +2,11 @@ from typing import Optional
 
 from core.navigation import Navigation
 from simulator.mission import Mission, Waypoint
+from simulator.mission_tasks import MissionTask, MissionTaskExecutor
 
 
 class MissionNavigator:
+    """Navigation + stateful mission task execution."""
 
     def __init__(self, mission: Mission, navigation: Navigation):
         self.mission = mission
@@ -13,6 +15,10 @@ class MissionNavigator:
         self.completed = False
         self.hold_started_at: Optional[float] = None
         self.default_arrival_radius = navigation.arrival_radius_m
+        self.task_executor = MissionTaskExecutor()
+        self.last_task_result = None
+        self._task_index = 0
+        self._tasks_started_for_index = -1
 
     def start(self) -> bool:
         if self.mission.count() == 0:
@@ -20,22 +26,32 @@ class MissionNavigator:
         self.active = False
         self.completed = False
         self.hold_started_at = None
+        self.last_task_result = None
+        self._task_index = 0
+        self._tasks_started_for_index = -1
+        self.task_executor.reset()
         self.navigation.clear_target()
         if not self.mission.start():
             return False
         self.active = True
         self._set_current_waypoint_target()
+        print(f"[MISSION] START count={self.mission.count()}")
         return True
 
     def stop(self):
         self.active = False
         self.completed = False
         self.hold_started_at = None
+        self.task_executor.reset()
 
     def reset(self):
         self.active = False
         self.completed = False
         self.hold_started_at = None
+        self.last_task_result = None
+        self._task_index = 0
+        self._tasks_started_for_index = -1
+        self.task_executor.reset()
         self.mission.reset()
         self.navigation.clear_target()
 
@@ -55,38 +71,67 @@ class MissionNavigator:
             self._finish_mission()
             return None
 
-        # LAND is special: do not finish while still ~1 m above ground.
-        reached = self._is_waypoint_reached(waypoint)
+        if not self._is_waypoint_reached(waypoint):
+            self.hold_started_at = None
+            return waypoint
 
-        if reached:
-            hold = max(0.0, float(getattr(waypoint, "hold_time", 0.0)))
-            if hold > 0.0:
-                if self.hold_started_at is None:
-                    self.hold_started_at = sim_time
-                
-                if sim_time - self.hold_started_at < hold:
-                    return waypoint
-            return self._advance()
+        tasks = list(getattr(waypoint, "tasks", []) or [])
+        if self._tasks_started_for_index != waypoint.index:
+            self._tasks_started_for_index = waypoint.index
+            self._task_index = 0
+            self.task_executor.reset()
+            print(f"[MISSION] WP{waypoint.index} REACHED")
 
-        self.hold_started_at = None
-        return waypoint
+        # Execute tasks sequentially. A RUNNING task blocks mission advance.
+        while self._task_index < len(tasks):
+            task = tasks[self._task_index]
+            result = self.task_executor.execute(task, waypoint.index, sim_time)
+            self.last_task_result = result
+            if result.get("status") != "DONE":
+                return waypoint
+
+            # Terminal task such as RTL transfers control to the drone
+            # flight controller. Do not call _advance(), because that
+            # would clear the HOME target that RTL just configured.
+            metadata = result.get("metadata") or {}
+            if metadata.get("terminal"):
+                self.active = False
+                self.completed = True
+                self.mission.finished = True
+                self.hold_started_at = None
+                self._task_index = 0
+                self._tasks_started_for_index = -1
+                print(f"[MISSION] TERMINAL TASK -> {result.get('task', 'ACTION')}")
+                return waypoint
+
+            self._task_index += 1
+
+        # Waypoint delay / LOITER_TIME.
+        hold = max(0.0, float(getattr(waypoint, "hold_time", 0.0)))
+        if hold > 0.0:
+            if self.hold_started_at is None:
+                self.hold_started_at = sim_time
+                print(f"[MISSION] WP{waypoint.index} HOLD START {hold:.1f}s")
+            elapsed = sim_time - self.hold_started_at
+            if elapsed < hold:
+                return waypoint
+            print(f"[MISSION] WP{waypoint.index} HOLD COMPLETE")
+
+        return self._advance()
 
     def _is_waypoint_reached(self, waypoint: Waypoint) -> bool:
         result = self.navigation.get_navigation_result()
         if result is None:
             return False
-
-        command = int(getattr(waypoint, "command", 16))
-        land_command = 21  # MAV_CMD_NAV_LAND
-
-        if command == land_command:
-            # Land only completes after reaching the XY target AND ground.
+        if int(getattr(waypoint, "command", 16)) == 21:
             return result.distance_m <= self.navigation.arrival_radius_m and self.navigation.current_position.alt <= 0.10
-
         return result.reached
 
     def _advance(self) -> Optional[Waypoint]:
         self.hold_started_at = None
+        self._task_index = 0
+        self._tasks_started_for_index = -1
+        self.task_executor.reset()
         if self.mission.is_last_waypoint():
             self._finish_mission()
             return None
@@ -95,6 +140,7 @@ class MissionNavigator:
             self._finish_mission()
             return None
         self._set_current_waypoint_target()
+        print(f"[MISSION] NEXT WP{waypoint.index}")
         return waypoint
 
     def _finish_mission(self):
@@ -103,20 +149,23 @@ class MissionNavigator:
         self.mission.finished = True
         self.navigation.clear_target()
         self.navigation.arrival_radius_m = self.default_arrival_radius
+        print("[MISSION] COMPLETE")
 
     def _set_current_waypoint_target(self):
         waypoint = self.mission.get_current_waypoint()
         if waypoint is None:
             self.navigation.clear_target()
             return
-
         radius = float(getattr(waypoint, "acceptance_radius", 0.0))
         self.navigation.arrival_radius_m = radius if radius > 0.0 else self.default_arrival_radius
-        self.navigation.set_target(
-            lat=waypoint.latitude,
-            lon=waypoint.longitude,
-            alt=waypoint.altitude,
-        )
+        self.navigation.set_target(lat=waypoint.latitude, lon=waypoint.longitude, alt=waypoint.altitude)
+
+    def attach_task(self, waypoint_index: int, task: MissionTask) -> bool:
+        waypoint = self.mission.get_waypoint(int(waypoint_index))
+        if waypoint is None:
+            return False
+        waypoint.tasks.append(task)
+        return True
 
     def get_current_waypoint(self) -> Optional[Waypoint]:
         return self.mission.get_current_waypoint()

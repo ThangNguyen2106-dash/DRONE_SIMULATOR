@@ -40,6 +40,7 @@ the project's MAVLink object is created as MAVLink(None).
 from pymavlink import mavutil
 
 from simulator.mission import Mission
+from simulator.mission_tasks import MissionTask
 
 
 # ============================================================
@@ -82,6 +83,7 @@ class MissionReceiver:
 
         # Mission-level speed command (MAV_CMD_DO_CHANGE_SPEED).
         self.pending_speed = 5.0
+        self.pending_tasks = []
 
         # ====================================================
         # STAGING MISSION
@@ -434,6 +436,7 @@ class MissionReceiver:
         self.received_count = 0
 
         self.pending_speed = 5.0
+        self.pending_tasks = []
 
         # New upload invalidates any download.
 
@@ -651,6 +654,77 @@ class MissionReceiver:
     # STORE INT ITEM
     # ========================================================
 
+    def _store_task_command(self, command: int, message) -> bool:
+        """Convert MAVLink action commands into tasks for the NAV item they follow.
+
+        In a MAVLink mission, DO commands are normally placed immediately after
+        the NAV item they belong to. During upload the previous NAV item is
+        therefore the correct place to attach the action.
+        """
+        image_start = getattr(mavutil.mavlink, "MAV_CMD_IMAGE_START_CAPTURE", 2000)
+        image_stop = getattr(mavutil.mavlink, "MAV_CMD_IMAGE_STOP_CAPTURE", 2001)
+        cam_trigger = getattr(mavutil.mavlink, "MAV_CMD_DO_SET_CAM_TRIGG_DIST", 206)
+        servo = getattr(mavutil.mavlink, "MAV_CMD_DO_SET_SERVO", 183)
+        gimbal = getattr(mavutil.mavlink, "MAV_CMD_DO_GIMBAL_MANAGER_PITCHYAW", 1000)
+        rtl = getattr(mavutil.mavlink, "MAV_CMD_NAV_RETURN_TO_LAUNCH", 20)
+        relay = getattr(mavutil.mavlink, "MAV_CMD_DO_SET_RELAY", 181)
+        roi = getattr(mavutil.mavlink, "MAV_CMD_DO_SET_ROI", 201)
+        nav_delay = getattr(mavutil.mavlink, "MAV_CMD_NAV_DELAY", 93)
+
+        task = None
+        if command == image_start:
+            task = MissionTask("PHOTO", {
+                "interval": float(getattr(message, "param2", 0.0)),
+                "count": int(max(1, getattr(message, "param3", 1))),
+            })
+        elif command == image_stop:
+            task = MissionTask("PHOTO_STOP")
+        elif command == cam_trigger:
+            task = MissionTask("CAMERA_TRIGGER_DISTANCE", {
+                "trigger_distance_m": float(getattr(message, "param1", 0.0)),
+            })
+        elif command == servo:
+            task = MissionTask("PAYLOAD_RELEASE", {
+                "servo": int(getattr(message, "param1", 0)),
+                "pwm": float(getattr(message, "param2", 0.0)),
+            })
+        elif command == gimbal:
+            task = MissionTask("GIMBAL", {
+                "pitch": float(getattr(message, "param1", 0.0)),
+                "yaw": float(getattr(message, "param2", 0.0)),
+            })
+        elif command == rtl:
+            task = MissionTask("RTL", {})
+        elif command == relay:
+            task = MissionTask("RELAY", {
+                "relay": int(getattr(message, "param1", 0)),
+                "state": int(getattr(message, "param2", 0)),
+            })
+        elif command == roi:
+            task = MissionTask("ROI", {
+                "roi_mode": int(getattr(message, "param1", 0)),
+                "latitude": float(getattr(message, "x", 0.0)) / 1e7,
+                "longitude": float(getattr(message, "y", 0.0)) / 1e7,
+                "altitude": float(getattr(message, "z", 0.0)),
+            })
+        elif command == nav_delay:
+            task = MissionTask("HOLD", {
+                "duration": max(0.0, float(getattr(message, "param1", 0.0)))
+            })
+        else:
+            return False
+
+        # Attach to the most recently received NAV item. If none exists yet,
+        # retain the old pending behavior so uploads remain tolerant.
+        if self.staging_mission.count() > 0:
+            wp = self.staging_mission.get_waypoint(self.staging_mission.count())
+            wp.tasks.append(task)
+            print(f"[MISSION RX] {task.task_type} attached to WP{wp.index}")
+        else:
+            self.pending_tasks.append(task)
+            print(f"[MISSION RX] {task.task_type} queued for next waypoint")
+        return True
+
     def _store_mission_item_int(
         self,
         message,
@@ -685,6 +759,9 @@ class MissionReceiver:
             except Exception:
                 return False
             print(f"[MISSION RX] DO_CHANGE_SPEED -> {self.pending_speed:.2f} m/s")
+            return True
+
+        if self._store_task_command(command, message):
             return True
 
         supported_commands = {
@@ -831,11 +908,13 @@ class MissionReceiver:
                 command=command,
                 acceptance_radius=acceptance_radius or 0.0,
                 yaw=yaw or 0.0,
+                tasks=list(self.pending_tasks),
             )
         )
 
         # Preserve the original MAVLink sequence.
         waypoint.source_seq = sequence
+        self.pending_tasks.clear()
 
         # Store extra values when the waypoint object supports
         # them. This keeps compatibility with the existing
@@ -925,6 +1004,9 @@ class MissionReceiver:
             print(f"[MISSION RX] DO_CHANGE_SPEED -> {self.pending_speed:.2f} m/s")
             return True
 
+        if self._store_task_command(command, message):
+            return True
+
         supported_commands = {
             mavutil.mavlink.MAV_CMD_NAV_WAYPOINT,
             mavutil.mavlink.MAV_CMD_NAV_TAKEOFF,
@@ -996,10 +1078,12 @@ class MissionReceiver:
                 command=command,
                 acceptance_radius=max(0.0, float(getattr(message, "param2", 0.0))),
                 yaw=float(getattr(message, "param4", 0.0)),
+                tasks=list(self.pending_tasks),
             )
         )
 
         waypoint.source_seq = sequence
+        self.pending_tasks.clear()
 
         print(
             "[MISSION RX] "
@@ -1244,6 +1328,7 @@ class MissionReceiver:
                     name=(
                         waypoint.name
                     ),
+                    tasks=list(getattr(waypoint, "tasks", []) or []),
                 )
             )
 
@@ -1338,6 +1423,7 @@ class MissionReceiver:
         self.download_index = 0
 
         self.staging_mission.clear()
+        self.pending_tasks = []
 
         self.mission.clear()
 

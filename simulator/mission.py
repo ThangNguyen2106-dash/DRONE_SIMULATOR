@@ -1,5 +1,7 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Optional
+
+from simulator.mission_tasks import MissionTask
 
 
 # ============================================================
@@ -26,6 +28,7 @@ class Waypoint:
     acceptance_radius: float = 0.0
     yaw: float = 0.0
     source_seq: int = -1
+    tasks: List[MissionTask] = field(default_factory=list)
 
 
 # ============================================================
@@ -65,6 +68,7 @@ class Mission:
         command: int = 16,
         acceptance_radius: float = 0.0,
         yaw: float = 0.0,
+        tasks: Optional[List[MissionTask]] = None,
     ) -> Waypoint:
 
         waypoint = Waypoint(
@@ -85,6 +89,7 @@ class Mission:
             acceptance_radius=max(0.0, float(acceptance_radius)),
             yaw=float(yaw) % 360.0,
             source_seq=len(self.waypoints),
+            tasks=list(tasks or []),
         )
 
         self.waypoints.append(

@@ -7,6 +7,7 @@ from simulation.flight_model import FlightModel
 
 from simulator.mission import Mission
 from simulator.mission_navigator import MissionNavigator
+from simulator.camera import CameraSimulator
 
 
 # ============================================================
@@ -86,6 +87,12 @@ class Drone:
         # MISSION
         # ====================================================
 
+        self.camera = CameraSimulator(drone=self)
+        self.gimbal_pitch = 0.0
+        self.gimbal_yaw = 0.0
+        self.relays = {}
+        self.roi = None
+
         self.mission = Mission()
 
         self.mission_navigator = (
@@ -94,6 +101,7 @@ class Drone:
                 navigation=self.navigation,
             )
         )
+        self.mission_navigator.task_executor.drone = self
 
     # ========================================================
     # MODE
@@ -897,6 +905,7 @@ class Drone:
         speed=5.0,
         hold_time=0.0,
         name="",
+        tasks=None,
     ):
 
         return self.mission.add_waypoint(
@@ -906,6 +915,7 @@ class Drone:
             speed=speed,
             hold_time=hold_time,
             name=name,
+            tasks=tasks,
         )
 
     # ========================================================
@@ -1022,6 +1032,7 @@ class Drone:
 
     def rtl(
         self,
+        from_mission: bool = False,
     ) -> bool:
 
         if not self.state.armed:
@@ -1031,10 +1042,13 @@ class Drone:
         with self.state.lock:
 
             # ------------------------------------------------
-            # Stop mission
+            # Stop mission unless RTL is being launched by a
+            # mission terminal action. In that case the mission
+            # navigator will transfer control to RTL itself.
             # ------------------------------------------------
 
-            self.mission_navigator.stop()
+            if not from_mission:
+                self.mission_navigator.stop()
 
             # ------------------------------------------------
             # Enable RTL
@@ -1325,6 +1339,10 @@ class Drone:
                 self.state,
                 dt,
             )
+
+            # Camera distance trigger runs after the flight model
+            # updates the position, so the travelled distance is real.
+            self.camera.update(sim_time=self.state.sim_time)
 
             # =================================================
             # BATTERY
