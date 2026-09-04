@@ -1247,6 +1247,43 @@ class Drone:
         # Returning to Home
         # ----------------------------------------------------
 
+        # Once RTL is inside the horizontal arrival radius,
+        # lock the simulated GPS position exactly to HOME.
+        # Without this final capture, the 20 Hz integrator can
+        # leave the aircraft a few metres beside HOME because
+        # the commanded speed is reduced to zero over several
+        # frames. A real autopilot also considers this an
+        # arrival/position-hold condition rather than continuing
+        # to integrate a stale horizontal velocity.
+        if result.distance_m <= max(
+            self.navigation.arrival_radius_m,
+            0.5,
+        ):
+
+            self.state.lat = self.home_lat
+            self.state.lon = self.home_lon
+
+            self.flight_model.set_target_speed(
+                0.0
+            )
+
+            self.flight_model.ground_speed = 0.0
+
+            self.state.ground_speed = 0.0
+
+            self.state.north_speed = 0.0
+            self.state.east_speed = 0.0
+
+            # Force navigation to see the exact HOME coordinate
+            # before switching to the vertical descent phase.
+            self.navigation.set_current_position(
+                lat=self.home_lat,
+                lon=self.home_lon,
+                alt=self.state.alt,
+            )
+
+            result = self.navigation.get_navigation_result()
+
         if result.distance_m > (
             self.navigation.arrival_radius_m
         ):

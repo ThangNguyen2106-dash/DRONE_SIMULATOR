@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 520">
+  <defs>
+    <linearGradient id="body" x1="0" y1="0" x2="0.8" y2="1">
+      <stop offset="0" stop-color="#e7eef5"/>
+      <stop offset="0.45" stop-color="#9baabd"/>
+      <stop offset="1" stop-color="#4b5b6d"/>
+    </linearGradient>
+    <linearGradient id="dark" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#354555"/>
+      <stop offset="1" stop-color="#151d26"/>
+    </linearGradient>
+    <linearGradient id="glass" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#8fe3ff"/>
+      <stop offset="1" stop-color="#17435b"/>
+    </linearGradient>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="9" stdDeviation="9" flood-opacity=".45"/>
+    </filter>
+  </defs>
+  <g filter="url(#shadow)">
+    <!-- arms -->
+    <path d="M300 225 L125 105 Q105 91 91 110 L105 126 L280 260 Z" fill="url(#dark)" stroke="#9aaabc" stroke-width="5"/>
+    <path d="M500 225 L675 105 Q695 91 709 110 L695 126 L520 260 Z" fill="url(#dark)" stroke="#9aaabc" stroke-width="5"/>
+    <path d="M300 295 L125 415 Q105 429 91 410 L105 394 L280 260 Z" fill="url(#dark)" stroke="#7e91a4" stroke-width="5"/>
+    <path d="M500 295 L675 415 Q695 429 709 410 L695 394 L520 260 Z" fill="url(#dark)" stroke="#7e91a4" stroke-width="5"/>
+    <!-- propellers -->
+    <g fill="none" stroke="#b9d2e5" stroke-width="7" opacity=".78">
+      <ellipse cx="100" cy="112" rx="70" ry="17" transform="rotate(-28 100 112)"/>
+      <ellipse cx="700" cy="112" rx="70" ry="17" transform="rotate(28 700 112)"/>
+      <ellipse cx="100" cy="408" rx="70" ry="17" transform="rotate(28 100 408)"/>
+      <ellipse cx="700" cy="408" rx="70" ry="17" transform="rotate(-28 700 408)"/>
+    </g>
+    <g fill="#17212c" stroke="#c3d3df" stroke-width="4">
+      <circle cx="100" cy="112" r="13"/><circle cx="700" cy="112" r="13"/>
+      <circle cx="100" cy="408" r="13"/><circle cx="700" cy="408" r="13"/>
+    </g>
+    <!-- main body -->
+    <path d="M276 225 Q292 164 355 139 Q400 121 445 139 Q508 164 524 225 L545 263 Q508 344 400 370 Q292 344 255 263 Z" fill="url(#body)" stroke="#d6e1ea" stroke-width="6"/>
+    <!-- top deck -->
+    <path d="M300 221 Q321 174 365 158 Q400 145 435 158 Q479 174 500 221 L480 258 Q445 292 400 302 Q355 292 320 258 Z" fill="#66788b" opacity=".92" stroke="#d6e1ea" stroke-width="4"/>
+    <!-- camera / nose -->
+    <path d="M342 174 Q400 145 458 174 L443 224 Q400 245 357 224 Z" fill="url(#glass)" stroke="#b8e9f7" stroke-width="5"/>
+    <ellipse cx="400" cy="198" rx="25" ry="17" fill="#0b1720" stroke="#6fd0f0" stroke-width="4"/>
+    <circle cx="400" cy="198" r="9" fill="#9deaff"/>
+    <!-- nose arrow -->
+    <path d="M400 112 L376 151 L400 142 L424 151 Z" fill="#eef7fc" stroke="#5f7589" stroke-width="3"/>
+    <!-- battery hatch -->
+    <rect x="356" y="253" width="88" height="45" rx="14" fill="#263543" stroke="#9caebe" stroke-width="3"/>
+    <rect x="375" y="267" width="50" height="9" rx="4" fill="#8ea3b5" opacity=".8"/>
+    <!-- landing skids -->
+    <path d="M290 317 Q320 371 350 384" fill="none" stroke="#263440" stroke-width="11" stroke-linecap="round"/>
+    <path d="M510 317 Q480 371 450 384" fill="none" stroke="#263440" stroke-width="11" stroke-linecap="round"/>
+    <path d="M335 386 L465 386" stroke="#b1c0cd" stroke-width="8" stroke-linecap="round"/>
+  </g>
+</svg>

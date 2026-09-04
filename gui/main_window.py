@@ -271,8 +271,8 @@ class MainWindow(QMainWindow):
         )
 
         self.setMinimumSize(
-            1200,
-            850,
+            900,
+            620,
         )
 
         # ====================================================
@@ -488,179 +488,177 @@ class MainWindow(QMainWindow):
     # ========================================================
 
     def _setup_ui(self):
-
         central = QWidget()
+        self.setCentralWidget(central)
 
-        self.setCentralWidget(
-            central
-        )
+        root_layout = QVBoxLayout(central)
+        root_layout.setContentsMargins(10, 10, 10, 10)
+        root_layout.setSpacing(8)
 
-        root_layout = QVBoxLayout(
-            central
-        )
+        title = QLabel("RIGEL UAV SIMULATOR")
+        title.setObjectName("appTitle")
+        title.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        root_layout.addWidget(title)
 
-        root_layout.setContentsMargins(
-            15,
-            15,
-            15,
-            15,
-        )
+        self._create_status_panel(root_layout)
 
-        root_layout.setSpacing(
-            10
-        )
+        # Responsive two-column workspace:
+        # left = always-visible 3D flight view + key telemetry
+        # right = scrollable configuration/control/mission panels.
+        from PySide6.QtWidgets import QSplitter
+        from gui.drone_3d_widget import Drone3DWidget
 
-        # ====================================================
-        # TITLE
-        # ====================================================
+        splitter = QSplitter(Qt.Horizontal)
+        splitter.setChildrenCollapsible(False)
+        splitter.setStretchFactor(0, 5)
+        splitter.setStretchFactor(1, 4)
 
-        title = QLabel(
-            "RIGEL UAV SIMULATOR"
-        )
+        left = QWidget()
+        left_layout = QVBoxLayout(left)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(8)
 
-        title.setAlignment(
-            Qt.AlignCenter
-        )
+        view_frame = QGroupBox("3D FLIGHT VIEW")
+        view_layout = QVBoxLayout(view_frame)
+        view_layout.setContentsMargins(4, 4, 4, 4)
+        self.drone_3d = Drone3DWidget()
+        view_layout.addWidget(self.drone_3d)
+        left_layout.addWidget(view_frame, 1)
 
-        title.setStyleSheet(
-            """
-            QLabel {
-                font-size: 26px;
-                font-weight: bold;
-                padding: 10px;
-            }
-            """
-        )
+        quick = QFrame()
+        quick.setObjectName("quickTelemetry")
+        qgrid = QGridLayout(quick)
+        qgrid.setContentsMargins(12, 8, 12, 8)
+        self.quick_alt = QLabel("0.00 m")
+        self.quick_speed = QLabel("0.00 m/s")
+        self.quick_mode = QLabel("STANDBY")
+        self.quick_battery = QLabel("100 %")
+        self.quick_wp = QLabel("--")
+        quick_items = [
+            ("ALT", self.quick_alt), ("SPEED", self.quick_speed),
+            ("MODE", self.quick_mode), ("BATTERY", self.quick_battery),
+            ("WP", self.quick_wp),
+        ]
+        for i, (name, value) in enumerate(quick_items):
+            qgrid.addWidget(QLabel(name), 0, i)
+            qgrid.addWidget(value, 1, i)
+        left_layout.addWidget(quick)
 
-        root_layout.addWidget(
-            title
-        )
-
-        # ====================================================
-        # STATUS (fixed top bar — stays visible while the rest
-        # of the panels below scroll)
-        # ====================================================
-
-        self._create_status_panel(
-            root_layout
-        )
-
-        # ====================================================
-        # SCROLL AREA
-        # ====================================================
+        splitter.addWidget(left)
 
         scroll = QScrollArea()
-
-        scroll.setWidgetResizable(
-            True
-        )
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
 
         scroll.setAlignment(
             Qt.AlignHCenter
         )
 
         content = QWidget()
+        content.setMaximumWidth(980)
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(4, 4, 4, 4)
+        content_layout.setSpacing(8)
 
-        # Keep the form-style panels at a readable width and
-        # center them instead of stretching labels/fields
-        # across a maximized ultra-wide window.
-        content.setMaximumWidth(
-            1400
-        )
+        self.drone_config_panel = DroneConfigPanel()
+        content_layout.addWidget(self.drone_config_panel)
 
-        content_layout = QVBoxLayout(
-            content
-        )
+        self.mavlink_config_panel = MAVLinkConfigPanel()
+        self.mavlink_config_panel.on_debug_toggled = self._on_telemetry_debug_toggled
+        content_layout.addWidget(self.mavlink_config_panel)
 
-        content_layout.setSpacing(
-            10
-        )
+        self._create_live_control_panel(content_layout)
 
-        scroll.setWidget(
-            content
-        )
+        self.joystick_panel = JoystickPanel()
+        self.joystick_panel.on_command = self._on_joystick_command
+        content_layout.addWidget(self.joystick_panel)
 
-        root_layout.addWidget(
-            scroll
-        )
+        self.mission_panel = MissionPanel()
+        self.mission_panel.on_command = self._on_mission_command
+        content_layout.addWidget(self.mission_panel)
 
-        # ====================================================
-        # INITIAL DRONE CONFIG
-        # ====================================================
-
-        self.drone_config_panel = (
-            DroneConfigPanel()
-        )
-
-        content_layout.addWidget(
-            self.drone_config_panel
-        )
-
-        # ====================================================
-        # MAVLINK CONFIG
-        # ====================================================
-
-        self.mavlink_config_panel = (
-            MAVLinkConfigPanel()
-        )
-
-        self.mavlink_config_panel.on_debug_toggled = (
-            self._on_telemetry_debug_toggled
-        )
-
-        content_layout.addWidget(
-            self.mavlink_config_panel
-        )
-
-        # ====================================================
-        # LIVE CONTROL
-        # ====================================================
-
-        self._create_live_control_panel(
-            content_layout
-        )
-
-        # ====================================================
-        # JOYSTICK
-        # ====================================================
-
-        self.joystick_panel = (
-            JoystickPanel()
-        )
-
-        self.joystick_panel.on_command = (
-            self._on_joystick_command
-        )
-
-        content_layout.addWidget(
-            self.joystick_panel
-        )
-
-        # ====================================================
-        # MISSION
-        # ====================================================
-
-        self.mission_panel = (
-            MissionPanel()
-        )
-
-        self.mission_panel.on_command = (
-            self._on_mission_command
-        )
-
-        content_layout.addWidget(
-            self.mission_panel
-        )
-
-        # ====================================================
-        # TELEMETRY
-        # ====================================================
-
-        self._create_telemetry_panel(
-            content_layout
-        )
-
+        self._create_telemetry_panel(content_layout)
         content_layout.addStretch()
+
+        scroll.setWidget(content)
+        splitter.addWidget(scroll)
+
+        root_layout.addWidget(splitter, 1)
+
+        self._apply_modern_style()
+
+    def _apply_modern_style(self):
+        self.setStyleSheet("""
+            QMainWindow, QWidget {
+                background: #0b1220;
+                color: #dce6f2;
+                font-family: "Segoe UI";
+                font-size: 10pt;
+            }
+            #appTitle {
+                font-size: 20pt;
+                font-weight: 700;
+                padding: 2px 4px 4px 4px;
+                color: #f1f6fb;
+            }
+            QFrame, QGroupBox {
+                background: #111b2b;
+                border: 1px solid #24354a;
+                border-radius: 10px;
+            }
+            QGroupBox {
+                margin-top: 9px;
+                padding-top: 12px;
+                font-weight: 700;
+                color: #a9bfd5;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 12px;
+                padding: 0 5px;
+                background: #111b2b;
+            }
+            QPushButton {
+                background: #1c3047;
+                border: 1px solid #31506f;
+                border-radius: 7px;
+                padding: 7px 12px;
+                min-height: 28px;
+            }
+            QPushButton:hover { background: #284461; }
+            QPushButton:pressed { background: #14283d; }
+            QPushButton:disabled { color: #627386; background: #131d29; }
+            QComboBox, QSpinBox, QDoubleSpinBox {
+                background: #0c1625;
+                border: 1px solid #2b425c;
+                border-radius: 6px;
+                padding: 5px 7px;
+                min-height: 26px;
+            }
+            QSlider::groove:horizontal {
+                height: 5px; background: #26384d; border-radius: 2px;
+            }
+            QSlider::handle:horizontal {
+                width: 14px; margin: -5px 0; border-radius: 7px;
+                background: #5d9bd3;
+            }
+            QTableWidget {
+                background: #0c1625;
+                alternate-background-color: #101d2e;
+                gridline-color: #25384d;
+                border: 1px solid #24354a;
+            }
+            QHeaderView::section {
+                background: #17263a;
+                color: #b9cce0;
+                padding: 6px;
+                border: 0;
+            }
+            #quickTelemetry QLabel {
+                background: transparent;
+                border: 0;
+            }
+        """)
 
     # ========================================================
     # STATUS PANEL
@@ -845,818 +843,94 @@ class MainWindow(QMainWindow):
         self,
         parent_layout,
     ):
+        """
+        Compact flight-control panel.
+
+        Continuous flight control belongs to the virtual
+        joystick, so the old altitude/speed/heading sliders,
+        attitude editors and GPS adjustment controls are not
+        duplicated here anymore. This panel is intentionally
+        limited to mode and discrete flight actions.
+        """
 
         self.live_frame = QGroupBox(
-            "LIVE SIMULATION CONTROL"
+            "FLIGHT CONTROL"
         )
 
         layout = QGridLayout(
             self.live_frame
         )
-
-        layout.setHorizontalSpacing(
-            10
-        )
-
-        layout.setVerticalSpacing(
-            8
-        )
-
-        row = 0
-
-        # ====================================================
-        # MODE
-        # ====================================================
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setHorizontalSpacing(8)
+        layout.setVerticalSpacing(8)
 
         layout.addWidget(
-            QLabel("Flight Mode"),
-            row,
+            QLabel("Mode"),
+            0,
             0,
         )
 
         self.mode_combo = QComboBox()
-
         self.mode_combo.addItems([
             "FREE",
             "ALT_HOLD",
             "MISSION",
         ])
-
         self.mode_combo.currentTextChanged.connect(
             self.on_mode_changed
         )
-
         layout.addWidget(
             self.mode_combo,
-            row,
-            1,
-            1,
-            2,
-        )
-
-        row += 1
-
-        # ====================================================
-        # ALTITUDE
-        # ====================================================
-
-        layout.addWidget(
-            QLabel("Altitude"),
-            row,
             0,
-        )
-
-        self.altitude_spin = (
-            NoWheelDoubleSpinBox()
-        )
-
-        self.altitude_spin.setRange(
-            0.0,
-            1000.0,
-        )
-
-        self.altitude_spin.setDecimals(
-            2
-        )
-
-        self.altitude_spin.setSingleStep(
-            1.0
-        )
-
-        self.altitude_spin.setSuffix(
-            " m"
-        )
-
-        self.altitude_slider = QSlider(
-            Qt.Horizontal
-        )
-
-        self.altitude_slider.setRange(
-            0,
-            100000,
-        )
-
-        self.altitude_button = QPushButton(
-            "APPLY"
-        )
-
-        self.altitude_button.clicked.connect(
-            self.apply_altitude
-        )
-
-        self.altitude_slider.valueChanged.connect(
-            self.on_altitude_slider_changed
-        )
-
-        self.altitude_slider.sliderPressed.connect(
-            self._require_armed
-        )
-
-        self.altitude_spin.valueChanged.connect(
-            self.on_altitude_spin_changed
-        )
-
-        layout.addWidget(
-            self.altitude_spin,
-            row,
             1,
+            1,
+            3,
         )
 
-        layout.addWidget(
-            self.altitude_button,
-            row,
-            2,
+        self.arm_button = QPushButton("ARM")
+        self.disarm_button = QPushButton("DISARM")
+        self.takeoff_button = QPushButton("TAKEOFF")
+        self.land_button = QPushButton("LAND")
+        self.rtl_button = QPushButton("RETURN TO HOME")
+        self.set_home_button = QPushButton("SET HOME HERE")
+
+        self.arm_button.clicked.connect(self.arm_drone)
+        self.disarm_button.clicked.connect(self.disarm_drone)
+        self.takeoff_button.clicked.connect(self.takeoff_drone)
+        self.land_button.clicked.connect(self.land_drone)
+        self.rtl_button.clicked.connect(self.rtl_drone)
+        self.set_home_button.clicked.connect(self.set_home_here)
+
+        buttons = [
+            self.arm_button,
+            self.disarm_button,
+            self.takeoff_button,
+            self.land_button,
+            self.rtl_button,
+            self.set_home_button,
+        ]
+
+        for i, button in enumerate(buttons):
+            layout.addWidget(
+                button,
+                1 + i // 3,
+                i % 3,
+            )
+
+        hint = QLabel(
+            "Joystick: LEFT = yaw / climb · RIGHT = move / tilt"
         )
-
-        row += 1
-
+        hint.setObjectName("controlHint")
         layout.addWidget(
-            self.altitude_slider,
-            row,
+            hint,
+            3,
             0,
             1,
             3,
         )
 
-        row += 1
-
-        # ====================================================
-        # SPEED
-        # ====================================================
-
-        layout.addWidget(
-            QLabel("Speed"),
-            row,
-            0,
-        )
-
-        self.speed_spin = (
-            NoWheelDoubleSpinBox()
-        )
-
-        self.speed_spin.setRange(
-            0.0,
-            100.0,
-        )
-
-        self.speed_spin.setDecimals(
-            2
-        )
-
-        self.speed_spin.setSingleStep(
-            0.5
-        )
-
-        self.speed_spin.setSuffix(
-            " m/s"
-        )
-
-        self.speed_slider = QSlider(
-            Qt.Horizontal
-        )
-
-        self.speed_slider.setRange(
-            0,
-            10000,
-        )
-
-        self.speed_button = QPushButton(
-            "APPLY"
-        )
-
-        self.speed_button.clicked.connect(
-            self.apply_speed
-        )
-
-        self.speed_slider.valueChanged.connect(
-            self.on_speed_slider_changed
-        )
-
-        self.speed_slider.sliderPressed.connect(
-            self._require_armed
-        )
-
-        self.speed_spin.valueChanged.connect(
-            self.on_speed_spin_changed
-        )
-
-        layout.addWidget(
-            self.speed_spin,
-            row,
-            1,
-        )
-
-        layout.addWidget(
-            self.speed_button,
-            row,
-            2,
-        )
-
-        row += 1
-
-        layout.addWidget(
-            self.speed_slider,
-            row,
-            0,
-            1,
-            3,
-        )
-
-        row += 1
-
-        # ====================================================
-        # HEADING
-        # ====================================================
-
-        layout.addWidget(
-            QLabel("Heading"),
-            row,
-            0,
-        )
-
-        self.heading_spin = (
-            NoWheelDoubleSpinBox()
-        )
-
-        self.heading_spin.setRange(
-            0.0,
-            360.0,
-        )
-
-        self.heading_spin.setDecimals(
-            2
-        )
-
-        self.heading_spin.setSingleStep(
-            1.0
-        )
-
-        self.heading_spin.setSuffix(
-            " °"
-        )
-
-        self.heading_slider = QSlider(
-            Qt.Horizontal
-        )
-
-        self.heading_slider.setRange(
-            0,
-            36000,
-        )
-
-        self.heading_button = QPushButton(
-            "APPLY"
-        )
-
-        self.heading_button.clicked.connect(
-            self.apply_heading
-        )
-
-        self.heading_slider.valueChanged.connect(
-            self.on_heading_slider_changed
-        )
-
-        self.heading_slider.sliderPressed.connect(
-            self._require_armed
-        )
-
-        self.heading_spin.valueChanged.connect(
-            self.on_heading_spin_changed
-        )
-
-        layout.addWidget(
-            self.heading_spin,
-            row,
-            1,
-        )
-
-        layout.addWidget(
-            self.heading_button,
-            row,
-            2,
-        )
-
-        row += 1
-
-        layout.addWidget(
-            self.heading_slider,
-            row,
-            0,
-            1,
-            3,
-        )
-
-        row += 1
-
-        # ====================================================
-        # LATITUDE
-        # ====================================================
-
-        layout.addWidget(
-            QLabel("Latitude"),
-            row,
-            0,
-        )
-
-        self.latitude_spin = (
-            NoWheelDoubleSpinBox()
-        )
-
-        self.latitude_spin.setRange(
-            -90.0,
-            90.0,
-        )
-
-        self.latitude_spin.setDecimals(
-            7
-        )
-
-        self.latitude_spin.setSingleStep(
-            0.0001
-        )
-
-        self.latitude_button = QPushButton(
-            "APPLY"
-        )
-
-        self.latitude_button.clicked.connect(
-            self.apply_latitude
-        )
-
-        layout.addWidget(
-            self.latitude_spin,
-            row,
-            1,
-        )
-
-        layout.addWidget(
-            self.latitude_button,
-            row,
-            2,
-        )
-
-        row += 1
-
-        # ====================================================
-        # LONGITUDE
-        # ====================================================
-
-        layout.addWidget(
-            QLabel("Longitude"),
-            row,
-            0,
-        )
-
-        self.longitude_spin = (
-            NoWheelDoubleSpinBox()
-        )
-
-        self.longitude_spin.setRange(
-            -180.0,
-            180.0,
-        )
-
-        self.longitude_spin.setDecimals(
-            7
-        )
-
-        self.longitude_spin.setSingleStep(
-            0.0001
-        )
-
-        self.longitude_button = QPushButton(
-            "APPLY"
-        )
-
-        self.longitude_button.clicked.connect(
-            self.apply_longitude
-        )
-
-        layout.addWidget(
-            self.longitude_spin,
-            row,
-            1,
-        )
-
-        layout.addWidget(
-            self.longitude_button,
-            row,
-            2,
-        )
-
-        row += 1
-
-        # ====================================================
-        # ROLL
-        # ====================================================
-
-        layout.addWidget(
-            QLabel("Roll"),
-            row,
-            0,
-        )
-
-        self.roll_spin = (
-            NoWheelDoubleSpinBox()
-        )
-
-        self.roll_spin.setRange(
-            -180.0,
-            180.0,
-        )
-
-        self.roll_spin.setDecimals(
-            2
-        )
-
-        self.roll_spin.setSuffix(
-            " °"
-        )
-
-        self.roll_spin.valueChanged.connect(
-            self.on_roll_changed
-        )
-
-        layout.addWidget(
-            self.roll_spin,
-            row,
-            1,
-            1,
-            2,
-        )
-
-        row += 1
-
-        # ====================================================
-        # PITCH
-        # ====================================================
-
-        layout.addWidget(
-            QLabel("Pitch"),
-            row,
-            0,
-        )
-
-        self.pitch_spin = (
-            NoWheelDoubleSpinBox()
-        )
-
-        self.pitch_spin.setRange(
-            -90.0,
-            90.0,
-        )
-
-        self.pitch_spin.setDecimals(
-            2
-        )
-
-        self.pitch_spin.setSuffix(
-            " °"
-        )
-
-        self.pitch_spin.valueChanged.connect(
-            self.on_pitch_changed
-        )
-
-        layout.addWidget(
-            self.pitch_spin,
-            row,
-            1,
-            1,
-            2,
-        )
-
-        row += 1
-
-        # ====================================================
-        # YAW
-        # ====================================================
-
-        layout.addWidget(
-            QLabel("Yaw"),
-            row,
-            0,
-        )
-
-        self.yaw_spin = (
-            NoWheelDoubleSpinBox()
-        )
-
-        self.yaw_spin.setRange(
-            0.0,
-            360.0,
-        )
-
-        self.yaw_spin.setDecimals(
-            2
-        )
-
-        self.yaw_spin.setSuffix(
-            " °"
-        )
-
-        self.yaw_spin.valueChanged.connect(
-            self.on_yaw_changed
-        )
-
-        layout.addWidget(
-            self.yaw_spin,
-            row,
-            1,
-            1,
-            2,
-        )
-
-        row += 1
-
-        # ====================================================
-        # BATTERY
-        # ====================================================
-
-        layout.addWidget(
-            QLabel("Battery"),
-            row,
-            0,
-        )
-
-        self.battery_spin = (
-            NoWheelDoubleSpinBox()
-        )
-
-        self.battery_spin.setRange(
-            0.0,
-            100.0,
-        )
-
-        self.battery_spin.setDecimals(
-            1
-        )
-
-        self.battery_spin.setSuffix(
-            " %"
-        )
-
-        self.battery_button = QPushButton(
-            "APPLY"
-        )
-
-        self.battery_button.clicked.connect(
-            self.apply_battery
-        )
-
-        layout.addWidget(
-            self.battery_spin,
-            row,
-            1,
-        )
-
-        layout.addWidget(
-            self.battery_button,
-            row,
-            2,
-        )
-
-        row += 1
-
-        # ====================================================
-        # GPS FIX
-        # ====================================================
-
-        layout.addWidget(
-            QLabel("GPS Fix"),
-            row,
-            0,
-        )
-
-        self.gps_fix_spin = (
-            NoWheelSpinBox()
-        )
-
-        self.gps_fix_spin.setRange(
-            0,
-            6,
-        )
-
-        self.gps_fix_spin.setValue(
-            3
-        )
-
-        layout.addWidget(
-            self.gps_fix_spin,
-            row,
-            1,
-        )
-
-        row += 1
-
-        # ====================================================
-        # SATELLITES
-        # ====================================================
-
-        layout.addWidget(
-            QLabel("Satellites"),
-            row,
-            0,
-        )
-
-        self.satellites_spin = (
-            NoWheelSpinBox()
-        )
-
-        self.satellites_spin.setRange(
-            0,
-            255,
-        )
-
-        self.satellites_spin.setValue(
-            12
-        )
-
-        self.gps_button = QPushButton(
-            "APPLY GPS"
-        )
-
-        self.gps_button.clicked.connect(
-            self.apply_gps
-        )
-
-        layout.addWidget(
-            self.satellites_spin,
-            row,
-            1,
-        )
-
-        layout.addWidget(
-            self.gps_button,
-            row,
-            2,
-        )
-
-        row += 1
-
-        # ====================================================
-        # HDOP
-        # ====================================================
-
-        layout.addWidget(
-            QLabel("HDOP"),
-            row,
-            0,
-        )
-
-        self.hdop_spin = (
-            NoWheelDoubleSpinBox()
-        )
-
-        self.hdop_spin.setRange(
-            0.0,
-            99.0,
-        )
-
-        self.hdop_spin.setDecimals(
-            2
-        )
-
-        self.hdop_spin.setValue(
-            1.0
-        )
-
-        layout.addWidget(
-            self.hdop_spin,
-            row,
-            1,
-        )
-
-        row += 1
-
-        # ====================================================
-        # VDOP
-        # ====================================================
-
-        layout.addWidget(
-            QLabel("VDOP"),
-            row,
-            0,
-        )
-
-        self.vdop_spin = (
-            NoWheelDoubleSpinBox()
-        )
-
-        self.vdop_spin.setRange(
-            0.0,
-            99.0,
-        )
-
-        self.vdop_spin.setDecimals(
-            2
-        )
-
-        self.vdop_spin.setValue(
-            1.0
-        )
-
-        layout.addWidget(
-            self.vdop_spin,
-            row,
-            1,
-        )
-
-        row += 1
-
-        # ====================================================
-        # ACTION BUTTONS
-        # ====================================================
-
-        actions = QHBoxLayout()
-
-        self.arm_button = QPushButton(
-            "ARM"
-        )
-
-        self.disarm_button = QPushButton(
-            "DISARM"
-        )
-
-        self.takeoff_button = QPushButton(
-            "TAKEOFF"
-        )
-
-        self.land_button = QPushButton(
-            "LAND"
-        )
-
-        self.rtl_button = QPushButton(
-            "RTL"
-        )
-
-        self.set_home_button = QPushButton(
-            "SET HOME = HERE"
-        )
-
-        self.arm_button.clicked.connect(
-            self.arm_drone
-        )
-
-        self.disarm_button.clicked.connect(
-            self.disarm_drone
-        )
-
-        self.takeoff_button.clicked.connect(
-            self.takeoff_drone
-        )
-
-        self.land_button.clicked.connect(
-            self.land_drone
-        )
-
-        self.rtl_button.clicked.connect(
-            self.rtl_drone
-        )
-
-        self.set_home_button.clicked.connect(
-            self.set_home_here
-        )
-
-        actions.addWidget(
-            self.arm_button
-        )
-
-        actions.addWidget(
-            self.disarm_button
-        )
-
-        actions.addWidget(
-            self.takeoff_button
-        )
-
-        actions.addWidget(
-            self.land_button
-        )
-
-        actions.addWidget(
-            self.rtl_button
-        )
-
-        actions.addWidget(
-            self.set_home_button
-        )
-
-        layout.addLayout(
-            actions,
-            row,
-            0,
-            1,
-            3,
-        )
-
-        self.live_frame.setEnabled(
-            False
-        )
-
-        parent_layout.addWidget(
-            self.live_frame
-        )
+        self.live_frame.setEnabled(False)
+        parent_layout.addWidget(self.live_frame)
 
     # ========================================================
     # TELEMETRY PANEL
@@ -2478,9 +1752,11 @@ class MainWindow(QMainWindow):
 
             return
 
+        # Altitude is controlled by the joystick/flight logic now.
+        # Use the simulator's standard takeoff target instead of a removed slider.
         self.worker.queue_command(
             "takeoff",
-            self.altitude_spin.value(),
+            10.0,
         )
 
         self.status_label.setText(
@@ -2788,6 +2064,20 @@ class MainWindow(QMainWindow):
         )
 
         # ----------------------------------------------------
+        # 3D view + compact dashboard
+        # ----------------------------------------------------
+        if hasattr(self, "drone_3d"):
+            self.drone_3d.update_telemetry(status)
+        if hasattr(self, "quick_alt"):
+            self.quick_alt.setText(f"{self._to_float(alt):.2f} m")
+            self.quick_speed.setText(f"{self._to_float(speed):.2f} m/s")
+            self.quick_mode.setText(str(mode).upper())
+            self.quick_battery.setText(f"{self._to_float(battery):.1f} %")
+            self.quick_wp.setText(
+                f"{current_wp}/{mission_count}" if current_wp is not None and mission_count > 0 else "--"
+            )
+
+        # ----------------------------------------------------
         # Display
         # ----------------------------------------------------
 
@@ -2906,115 +2196,8 @@ class MainWindow(QMainWindow):
                 f"{self._to_float(altitude_error):.2f} m"
             )
 
-        # ----------------------------------------------------
-        # Sync controls without generating commands.
-        # ----------------------------------------------------
-
-        self._sync_double_spin(
-            self.altitude_spin,
-            status.get(
-                "target_altitude"
-            ),
-        )
-
-        self._sync_double_spin(
-            self.speed_spin,
-            status.get(
-                "target_ground_speed"
-            ),
-        )
-
-        self._sync_double_spin(
-            self.heading_spin,
-            status.get(
-                "target_heading"
-            ),
-        )
-
-        self._sync_double_spin(
-            self.latitude_spin,
-            lat,
-        )
-
-        self._sync_double_spin(
-            self.longitude_spin,
-            lon,
-        )
-
-        self._sync_double_spin(
-            self.roll_spin,
-            roll,
-        )
-
-        self._sync_double_spin(
-            self.pitch_spin,
-            pitch,
-        )
-
-        self._sync_double_spin(
-            self.yaw_spin,
-            yaw,
-        )
-
-        self._sync_double_spin(
-            self.battery_spin,
-            battery,
-        )
-
-        self._sync_int_spin(
-            self.gps_fix_spin,
-            status.get(
-                "gps_fix"
-            ),
-        )
-
-        self._sync_int_spin(
-            self.satellites_spin,
-            status.get(
-                "satellites"
-            ),
-        )
-
-        self._sync_double_spin(
-            self.hdop_spin,
-            status.get(
-                "gps_hdop"
-            ),
-        )
-
-        self._sync_double_spin(
-            self.vdop_spin,
-            status.get(
-                "gps_vdop"
-            ),
-        )
-
-        # ----------------------------------------------------
-        # Slider sync
-        # ----------------------------------------------------
-
-        self._sync_slider(
-            self.altitude_slider,
-            status.get(
-                "target_altitude"
-            ),
-            100.0,
-        )
-
-        self._sync_slider(
-            self.speed_slider,
-            status.get(
-                "target_ground_speed"
-            ),
-            100.0,
-        )
-
-        self._sync_slider(
-            self.heading_slider,
-            status.get(
-                "target_heading"
-            ),
-            100.0,
+        self.joystick_panel.sync_targets(
+            status
         )
 
         self.joystick_panel.sync_targets(
