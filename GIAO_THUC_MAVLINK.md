@@ -13,7 +13,7 @@ Dựa trên mã nguồn thực tế trong `mavlink/connection.py`, `mavlink/tele
 > tả dưới đây. `mavlink/server.py` được coi là một cài đặt thay thế/legacy, không nên xem là hành
 > vi runtime hiện tại.
 
-## 1. Tầng vận chuyển (Transport Layer)
+## 1. Tầng vận chuyển (Transport Layer) 
 
 - **Giao thức mạng:** UDP, dùng `socket.socket(AF_INET, SOCK_DGRAM)` chuẩn của Python
   (`mavlink/connection.py`), **không** dùng `mavutil.mavlink_connection()`.
