@@ -6,5 +6,5 @@
   "rx_host": "0.0.0.0",
   "rx_port": 14551,
   "telemetry_rate_hz": 20,
-  "home": {"lat": 10.8231, "lon": 106.6297, "alt": 0.0}
+  "home": {"lat": 10.665606, "lon": 106.671538, "alt": 0.0}
 }

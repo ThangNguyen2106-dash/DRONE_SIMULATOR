@@ -1,4 +1,6 @@
 from enum import Enum
+import math
+from typing import Optional
 
 from core.state import DroneState
 from core.navigation import Navigation
@@ -30,8 +32,8 @@ class Drone:
 
     def __init__(
         self,
-        lat=10.8231000,
-        lon=106.6297000,
+        lat=10.665606,
+        lon=106.671538,
         alt=0.0,
     ):
 
@@ -489,6 +491,62 @@ class Drone:
                     lateral,
                 )
 
+        return True
+
+    # ========================================================
+    # 8-DIRECTION MOVEMENT COMMANDS
+    # ========================================================
+
+    def move_direction(
+        self,
+        direction: str,
+        speed: float = 5.0,
+    ) -> bool:
+        """Command the drone to move in one of the 8 directions in body frame:
+        FORWARD, BACKWARD, LEFT, RIGHT, FORWARD_LEFT, FORWARD_RIGHT,
+        BACKWARD_LEFT, BACKWARD_RIGHT, STOP.
+        """
+        if not self.state.armed:
+            return False
+
+        with self.state.lock:
+            self.flight_model.set_direction(direction, speed)
+        return True
+
+    def set_velocity_ned(
+        self,
+        vx: float,
+        vy: float,
+        vz: Optional[float] = None,
+    ) -> bool:
+        """Command 3D velocity in North-East-Down coordinate frame."""
+        if not self.state.armed:
+            return False
+
+        with self.state.lock:
+            # Transform world velocity (North/East) into body forward/lateral
+            heading_rad = math.radians(self.state.heading)
+            cos_h = math.cos(heading_rad)
+            sin_h = math.sin(heading_rad)
+
+            # Body forward = vx * cos(h) + vy * sin(h)
+            # Body lateral = -vx * sin(h) + vy * cos(h)
+            body_forward = vx * cos_h + vy * sin_h
+            body_lateral = -vx * sin_h + vy * cos_h
+
+            self.flight_model.set_body_velocity(body_forward, body_lateral)
+
+            if vz is not None:
+                # In NED, down is positive, so -vz is climb rate
+                self.flight_model.target_altitude = max(0.0, self.state.alt - vz)
+
+        return True
+
+    def brake(self) -> bool:
+        """Actively brake and stop horizontal velocity in place."""
+        with self.state.lock:
+            self.flight_model.set_body_velocity(0.0, 0.0)
+            self.flight_model.target_speed = 0.0
         return True
 
     # ========================================================
@@ -1284,112 +1342,38 @@ class Drone:
 
             result = self.navigation.get_navigation_result()
 
-        if result.distance_m > (
-            self.navigation.arrival_radius_m
-        ):
+        dist = result.distance_m
+        arrival_r = max(0.5, self.navigation.arrival_radius_m)
 
-            self.flight_model.set_target_heading(
-                result.bearing_deg
-            )
-
-            # Slow down as the drone nears home instead of
-            # cruising at full speed right up to arrival_radius_m
-            # and then snapping to a stop.
-
+        if dist > arrival_r:
             rtl_cruise_speed = 5.0
+            deceleration_distance_m = 12.0
 
-            deceleration_distance_m = 15.0
-
-            if result.distance_m < deceleration_distance_m:
-
-                speed_fraction = (
-                    (
-                        result.distance_m
-                        - self.navigation.arrival_radius_m
-                    )
-                    / (
-                        deceleration_distance_m
-                        - self.navigation.arrival_radius_m
-                    )
-                )
-
-                speed_fraction = max(
-                    0.0,
-                    min(
-                        1.0,
-                        speed_fraction,
-                    ),
-                )
-
-                rtl_speed = (
-                    rtl_cruise_speed * speed_fraction
-                )
-
+            if dist < deceleration_distance_m:
+                speed_fraction = max(0.0, min(1.0, (dist - arrival_r) / (deceleration_distance_m - arrival_r)))
+                rtl_speed = rtl_cruise_speed * math.sqrt(speed_fraction)
+                rtl_speed = max(0.3, rtl_speed)
             else:
-
                 rtl_speed = rtl_cruise_speed
 
-            self.flight_model.set_target_speed(
-                rtl_speed
-            )
+            rel_angle_deg = (result.bearing_deg - self.flight_model.heading + 180.0) % 360.0 - 180.0
+            rel_angle_rad = math.radians(rel_angle_deg)
 
-            # Hold cruise altitude while flying back; only
-            # descend after arriving horizontally over home.
+            body_fwd = rtl_speed * math.cos(rel_angle_rad)
+            body_lat = rtl_speed * math.sin(rel_angle_rad)
 
-            self.flight_model.set_target_altitude(
-                self.state.alt
-            )
-
+            self.flight_model.set_target_heading(result.bearing_deg)
+            self.flight_model.set_body_velocity(body_fwd, body_lat)
+            self.flight_model.set_target_altitude(self.state.alt)
             return
 
         # ----------------------------------------------------
-        # Arrived horizontally
+        # Arrived horizontally over HOME -> Begin vertical landing descent
         # ----------------------------------------------------
-
-        self.flight_model.set_target_speed(
-            0.0
-        )
-
-        # Arrived over home: descend straight to the ground
-        # (0m) right away instead of home_alt, which is just
-        # the altitude the drone happened to be armed at.
-
-        self.flight_model.set_target_altitude(
-            0.0
-        )
-
+        self.flight_model.set_body_velocity(0.0, 0.0)
+        self.flight_model.set_target_speed(0.0)
+        self.flight_model.set_target_altitude(0.0)
         self.state.mode = "LAND"
-
-        # ----------------------------------------------------
-        # Check altitude
-        # ----------------------------------------------------
-
-        altitude_error = abs(
-            self.state.alt
-        )
-
-        if (
-            altitude_error
-            <= self.navigation.altitude_tolerance_m
-        ):
-
-            self.flight_model.set_target_speed(
-                0.0
-            )
-
-            self.flight_model.set_target_altitude(
-                0.0
-            )
-
-            self.rtl_active = False
-
-            self.navigation.clear_target()
-
-            self.state.mode = "HOLD"
-
-            self.flight_mode = (
-                FlightMode.ALT_HOLD
-            )
 
     # ========================================================
     # UPDATE MISSION
@@ -1471,28 +1455,43 @@ class Drone:
             return
 
         # ----------------------------------------------------
-        # Heading
+        # 1. TÍNH TOÁN KHOẢNG CÁCH VÀ VẬN TỐC TIẾP CẬN CHÍNH XÁC
         # ----------------------------------------------------
+        dist = result.distance_m
+        arrival_r = max(0.5, self.navigation.arrival_radius_m)
+        cruise_speed = max(1.0, min(float(waypoint.speed), 15.0))
 
-        self.flight_model.set_target_heading(
-            result.bearing_deg
-        )
+        # Smooth deceleration profile on approach to find exact coordinate
+        decel_dist = max(6.0, cruise_speed * 1.5 + arrival_r)
+        if dist <= arrival_r:
+            approach_speed = 0.0
+        elif dist < decel_dist:
+            speed_fraction = max(0.0, min(1.0, (dist - arrival_r) / (decel_dist - arrival_r)))
+            approach_speed = cruise_speed * math.sqrt(speed_fraction)
+            approach_speed = max(0.3, approach_speed)
+        else:
+            approach_speed = cruise_speed
 
         # ----------------------------------------------------
-        # Speed from WP
+        # 2. ĐA HƯỚNG & TIẾN / LÙI (KHÔNG CẦN QUAY ĐẦU VÒNG LẠI KHI LỐ)
         # ----------------------------------------------------
+        rel_angle_deg = (result.bearing_deg - self.flight_model.heading + 180.0) % 360.0 - 180.0
+        rel_angle_rad = math.radians(rel_angle_deg)
 
-        self.flight_model.set_target_speed(
-            waypoint.speed
-        )
+        # Phân rã vector vận tốc vào hệ trục Body của Drone:
+        # - Mục tiêu phía trước (rel_angle ~ 0°): body_fwd > 0 (bay tiến thẳng tới WP)
+        # - Nếu lỡ bay lố qua điểm (rel_angle ~ ±180°): body_fwd < 0 (TỰ ĐỘNG LÙI LẠI NGAY)
+        # - Lệch trái/phải (rel_angle ~ ±90°): body_lat điều chỉnh ngang chính xác
+        body_fwd = approach_speed * math.cos(rel_angle_rad)
+        body_lat = approach_speed * math.sin(rel_angle_rad)
 
         # ----------------------------------------------------
-        # Altitude from WP
+        # 3. ĐẦU DRONE LUÔN HƯỚNG VỀ ĐIỂM WP
         # ----------------------------------------------------
+        self.flight_model.set_target_heading(result.bearing_deg)
 
-        self.flight_model.set_target_altitude(
-            waypoint.altitude
-        )
+        self.flight_model.set_body_velocity(body_fwd, body_lat)
+        self.flight_model.set_target_altitude(waypoint.altitude)
 
     # ========================================================
     # UPDATE
@@ -1578,44 +1577,38 @@ class Drone:
             )
 
             # =================================================
-            # GROUND
+            # GROUND & AUTO-DISARM
             # =================================================
 
             if (
                 self.state.alt <= 0.01
                 and
-                self.flight_model.target_altitude
-                <= 0.0
+                self.flight_model.target_altitude <= 0.01
             ):
 
                 self.state.alt = 0.0
-
                 self.state.vertical_speed = 0.0
-
                 self.state.airborne = False
 
-                self.flight_model.set_target_speed(
-                    0.0
-                )
+                # Stop and freeze all flight model motion
+                self.flight_model.set_target_speed(0.0)
+                self.flight_model.ground_speed = 0.0
+                self.flight_model.north_speed = 0.0
+                self.flight_model.east_speed = 0.0
+                self.flight_model.vertical_speed = 0.0
+                self.flight_model.pitch = 0.0
+                self.flight_model.roll = 0.0
+                self.flight_model.release_body_velocity()
+                self.flight_model.clear_nudge()
 
-                if self.state.mode in (
-                    "LAND",
-                    "RTL",
-                ):
-
-                    self.state.mode = "HOLD"
-
-                    # Touching down from a commanded LAND/RTL
-                    # disarms automatically, so the next flight
-                    # requires an explicit ARM again.
-
-                    self.state.armed = False
-
-                if self.rtl_active:
-
+                # Khi hạ cánh về điểm Home / Landing độ cao về 0m:
+                # Tự động TẮT ARM và khóa hoàn toàn hoạt động của Drone
+                if self.rtl_active or self.state.mode in ("LAND", "RTL", "HOLD", "AUTO"):
                     self.rtl_active = False
-
                     self.navigation.clear_target()
+                    self.state.armed = False
+                    self.state.mode = "DISARMED"
+                    self.flight_mode = FlightMode.FREE
 
     # ========================================================
     # BATTERY

@@ -385,6 +385,30 @@ class SimulationWorker(QThread):
             return
 
         # ====================================================
+        # MOVE DIRECTION (8-WAY FLIGHT)
+        # ====================================================
+
+        if command == "move_direction":
+
+            if isinstance(value, dict):
+                direction = value.get("direction", "STOP")
+                speed = value.get("speed", 5.0)
+            else:
+                direction = str(value)
+                speed = 5.0
+
+            self.drone.move_direction(direction, speed)
+            return
+
+        # ====================================================
+        # BRAKE
+        # ====================================================
+
+        if command == "brake":
+            self.drone.brake()
+            return
+
+        # ====================================================
         # RELEASE BODY VELOCITY CONTROL
         # ====================================================
 
@@ -1100,7 +1124,7 @@ class SimulationWorker(QThread):
                 "lat",
                 self.mavlink_config.get(
                     "home_lat",
-                    10.8231000,
+                    10.665606,
                 ),
             )
 
@@ -1109,7 +1133,7 @@ class SimulationWorker(QThread):
                 "lon",
                 self.mavlink_config.get(
                     "home_lon",
-                    106.6297000,
+                    106.671538,
                 ),
             )
 

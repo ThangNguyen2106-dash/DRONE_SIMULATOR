@@ -139,6 +139,39 @@ class CommandReceiver:
             )
 
         # ====================================================
+        # SET_POSITION_TARGET_LOCAL_NED
+        # ====================================================
+
+        if (
+            message_type
+            == "SET_POSITION_TARGET_LOCAL_NED"
+        ):
+
+            return self._handle_position_target_local_ned(
+                message
+            )
+
+        # ====================================================
+        # MANUAL_CONTROL
+        # ====================================================
+
+        if message_type == "MANUAL_CONTROL":
+
+            return self._handle_manual_control(
+                message
+            )
+
+        # ====================================================
+        # RC_CHANNELS_OVERRIDE / RC_CHANNELS
+        # ====================================================
+
+        if message_type in ("RC_CHANNELS_OVERRIDE", "RC_CHANNELS"):
+
+            return self._handle_rc_channels(
+                message
+            )
+
+        # ====================================================
         # PARAM_REQUEST_LIST
         # ====================================================
 
@@ -842,3 +875,106 @@ class CommandReceiver:
         mav_log.info(COMMAND, f"POSITION TARGET {lat:.7f}, {lon:.7f}, {altitude:.1f}m")
 
         return True
+
+    # ========================================================
+    # MANUAL CONTROL (8-DIRECTION JOYSTICK / RC)
+    # ========================================================
+
+    def _handle_manual_control(
+        self,
+        message,
+    ) -> bool:
+        if self.drone is None:
+            return False
+
+        # MAVLink MANUAL_CONTROL ranges from -1000 to +1000:
+        # x = pitch (forward + / backward -)
+        # y = roll (strafe right + / strafe left -)
+        # z = throttle (climb + / descend -)
+        # r = yaw rate (turn right + / turn left -)
+        x = float(getattr(message, "x", 0.0)) / 1000.0
+        y = float(getattr(message, "y", 0.0)) / 1000.0
+        z = float(getattr(message, "z", 500.0))
+        r = float(getattr(message, "r", 0.0)) / 1000.0
+
+        max_speed = 15.0
+        forward_speed = max(-max_speed, min(x * max_speed, max_speed))
+        lateral_speed = max(-max_speed, min(y * max_speed, max_speed))
+
+        # Command body-frame velocity (8 directions)
+        self.drone.set_body_velocity(forward_speed, lateral_speed)
+
+        # Yaw turning
+        if abs(r) > 0.05:
+            yaw_rate = r * 60.0
+            new_heading = (self.drone.state.heading + yaw_rate * 0.05) % 360.0
+            self.drone.set_heading(new_heading)
+
+        # Climb / Descend
+        if z > 0:
+            throttle_norm = (z - 500.0) / 500.0 if z > 500.0 else (z - 500.0) / 500.0
+            if abs(throttle_norm) > 0.1:
+                climb_rate = throttle_norm * 3.0
+                new_alt = max(0.0, self.drone.state.alt + climb_rate * 0.05)
+                self.drone.set_altitude(new_alt)
+
+        return True
+
+    # ========================================================
+    # RC CHANNELS (CH1: Roll, CH2: Pitch, CH3: Thr, CH4: Yaw)
+    # ========================================================
+
+    def _handle_rc_channels(
+        self,
+        message,
+    ) -> bool:
+        if self.drone is None:
+            return False
+
+        # PWM ranges from 1000us to 2000us, mid = 1500us
+        ch1 = getattr(message, "chan1_raw", getattr(message, "chan1", 1500))
+        ch2 = getattr(message, "chan2_raw", getattr(message, "chan2", 1500))
+        ch3 = getattr(message, "chan3_raw", getattr(message, "chan3", 1500))
+        ch4 = getattr(message, "chan4_raw", getattr(message, "chan4", 1500))
+
+        roll_norm = (float(ch1) - 1500.0) / 500.0
+        pitch_norm = (float(ch2) - 1500.0) / 500.0
+        thr_norm = (float(ch3) - 1500.0) / 500.0
+        yaw_norm = (float(ch4) - 1500.0) / 500.0
+
+        max_speed = 15.0
+        forward_speed = max(-max_speed, min(-pitch_norm * max_speed, max_speed))
+        lateral_speed = max(-max_speed, min(roll_norm * max_speed, max_speed))
+
+        self.drone.set_body_velocity(forward_speed, lateral_speed)
+
+        if abs(yaw_norm) > 0.08:
+            new_heading = (self.drone.state.heading + yaw_norm * 60.0 * 0.05) % 360.0
+            self.drone.set_heading(new_heading)
+
+        if abs(thr_norm) > 0.1:
+            new_alt = max(0.0, self.drone.state.alt + thr_norm * 3.0 * 0.05)
+            self.drone.set_altitude(new_alt)
+
+        return True
+
+    # ========================================================
+    # SET POSITION TARGET LOCAL NED (3D VELOCITY SETPOINT)
+    # ========================================================
+
+    def _handle_position_target_local_ned(
+        self,
+        message,
+    ) -> bool:
+        if self.drone is None:
+            return False
+
+        vx = getattr(message, "vx", None)
+        vy = getattr(message, "vy", None)
+        vz = getattr(message, "vz", None)
+
+        if vx is not None and vy is not None:
+            self.drone.set_velocity_ned(float(vx), float(vy), float(vz) if vz is not None else None)
+            return True
+
+        return False

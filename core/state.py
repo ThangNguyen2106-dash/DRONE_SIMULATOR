@@ -6,8 +6,8 @@ class DroneState:
 
     def __init__(
         self,
-        lat=10.8231000,
-        lon=106.6297000,
+        lat=10.665606,
+        lon=106.671538,
         alt=0.0,
     ):
 

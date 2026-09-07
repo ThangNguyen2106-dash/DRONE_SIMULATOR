@@ -742,8 +742,8 @@ class MainWindow(QMainWindow):
             )
 
             drone_config = {
-                "lat": 10.8231000,
-                "lon": 106.6297000,
+                "lat": 10.665606,
+                "lon": 106.671538,
                 "alt": 0.0,
             }
 
@@ -2225,3 +2225,30 @@ class MainWindow(QMainWindow):
             self.worker = None
 
         event.accept()
+
+    # ========================================================
+    # KEYBOARD 8-DIRECTION FLIGHT CONTROLS
+    # ========================================================
+
+    def keyPressEvent(self, event):
+        # Ignore if user is currently typing in an input field
+        focus = self.focusWidget()
+        if focus is not None and focus.__class__.__name__ in (
+            "QLineEdit", "QSpinBox", "QDoubleSpinBox", "QTextEdit", "QPlainTextEdit"
+        ):
+            super().keyPressEvent(event)
+            return
+
+        if hasattr(self, "joystick_panel") and self.joystick_panel.isEnabled():
+            handled = self.joystick_panel.handle_key_event(event.key(), True)
+            if handled:
+                event.accept()
+                return
+
+        super().keyPressEvent(event)
+
+    def keyReleaseEvent(self, event):
+        if hasattr(self, "joystick_panel") and self.joystick_panel.isEnabled():
+            self.joystick_panel.handle_key_event(event.key(), False)
+
+        super().keyReleaseEvent(event)

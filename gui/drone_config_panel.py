@@ -55,7 +55,7 @@ class DroneConfigPanel(QGroupBox):
         )
 
         self.latitude.setValue(
-            10.8231000
+            10.665606
         )
 
         layout.addRow(
@@ -83,7 +83,7 @@ class DroneConfigPanel(QGroupBox):
         )
 
         self.longitude.setValue(
-            106.6297000
+            106.671538
         )
 
         layout.addRow(
