@@ -1536,6 +1536,36 @@ class MainWindow(QMainWindow):
 
             return
 
+        if command == "arm":
+
+            self.arm_drone()
+
+            return
+
+        if command == "disarm":
+
+            self.disarm_drone()
+
+            return
+
+        if command == "takeoff":
+
+            self.takeoff_drone()
+
+            return
+
+        if command == "land":
+
+            self.land_drone()
+
+            return
+
+        if command == "rtl":
+
+            self.rtl_drone()
+
+            return
+
         if not self._drone_armed:
 
             if not self._joystick_warned:

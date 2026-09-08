@@ -11,7 +11,11 @@ from PySide6.QtWidgets import (
     QPushButton,
     QWidget,
     QFrame,
+    QComboBox,
+    QCheckBox,
 )
+
+from core.joystick_driver import JoystickDriver
 
 
 # ============================================================
@@ -158,6 +162,9 @@ class JoystickPanel(QGroupBox):
         # Keyboard state tracking
         self._keys_pressed = set()
 
+        # Hardware Controller Driver (RadioMaster TX16S / USB Joystick)
+        self.hw_joystick = JoystickDriver()
+
         self._setup_ui()
 
         self._timer = QTimer(self)
@@ -171,6 +178,118 @@ class JoystickPanel(QGroupBox):
         main_layout = QVBoxLayout()
         main_layout.setContentsMargins(12, 12, 12, 12)
         main_layout.setSpacing(10)
+
+        # ----------------------------------------------------
+        # HARDWARE CONTROLLER BANNER
+        # ----------------------------------------------------
+        hw_frame = QFrame()
+        hw_frame.setStyleSheet(
+            "background: #0d1723; border: 1px solid #1e3146; border-radius: 6px; padding: 4px;"
+        )
+        hw_layout = QHBoxLayout(hw_frame)
+        hw_layout.setContentsMargins(8, 4, 8, 4)
+        hw_layout.setSpacing(8)
+
+        self.hw_led = QLabel("●")
+        self.hw_led.setStyleSheet("color: #78909c; font-size: 11pt;")
+        self.hw_status_label = QLabel("🎮 Hardware: Checking USB Joystick...")
+        self.hw_status_label.setStyleSheet("color: #dce6f2; font-size: 8.5pt; font-weight: bold;")
+
+        self.hw_channels_label = QLabel("Pitch: -- | Roll: -- | Thr: -- | Yaw: --")
+        self.hw_channels_label.setStyleSheet("color: #00d2ff; font-family: Consolas; font-size: 8pt;")
+
+        hw_layout.addWidget(self.hw_led)
+        hw_layout.addWidget(self.hw_status_label)
+        hw_layout.addStretch()
+        hw_layout.addWidget(self.hw_channels_label)
+
+        main_layout.addWidget(hw_frame)
+
+        # ----------------------------------------------------
+        # CHANNEL MAPPING & INVERT CONFIGURATION
+        # ----------------------------------------------------
+        cfg_frame = QFrame()
+        cfg_frame.setStyleSheet(
+            "background: #08101a; border: 1px solid #18283a; border-radius: 5px; padding: 2px;"
+        )
+        cfg_layout = QHBoxLayout(cfg_frame)
+        cfg_layout.setContentsMargins(6, 2, 6, 2)
+        cfg_layout.setSpacing(8)
+
+        cfg_title = QLabel("⚙ Ánh xạ trục:")
+        cfg_title.setStyleSheet("color: #8fa8bf; font-weight: bold; font-size: 8pt;")
+        cfg_layout.addWidget(cfg_title)
+
+        axis_options = ["X (Axis 1)", "Y (Axis 2)", "Z (Axis 3)", "R (Axis 4)", "U (Axis 5)", "V (Axis 6)"]
+
+        # Pitch
+        p_lbl = QLabel("Pitch:")
+        p_lbl.setStyleSheet("color: #b0c4de; font-size: 8pt;")
+        cfg_layout.addWidget(p_lbl)
+        self.combo_pitch = QComboBox()
+        self.combo_pitch.addItems(axis_options)
+        self.combo_pitch.setCurrentIndex(0)  # X
+        self.chk_inv_pitch = QCheckBox("Ngược")
+        self.chk_inv_pitch.setChecked(False)
+        cfg_layout.addWidget(self.combo_pitch)
+        cfg_layout.addWidget(self.chk_inv_pitch)
+
+        # Roll
+        r_lbl = QLabel("Roll:")
+        r_lbl.setStyleSheet("color: #b0c4de; font-size: 8pt;")
+        cfg_layout.addWidget(r_lbl)
+        self.combo_roll = QComboBox()
+        self.combo_roll.addItems(axis_options)
+        self.combo_roll.setCurrentIndex(1)  # Y
+        self.chk_inv_roll = QCheckBox("Ngược")
+        self.chk_inv_roll.setChecked(False)
+        cfg_layout.addWidget(self.combo_roll)
+        cfg_layout.addWidget(self.chk_inv_roll)
+
+        # Throttle (Ga)
+        t_lbl = QLabel("Ga (Thr):")
+        t_lbl.setStyleSheet("color: #b0c4de; font-size: 8pt;")
+        cfg_layout.addWidget(t_lbl)
+        self.combo_thr = QComboBox()
+        self.combo_thr.addItems(axis_options)
+        self.combo_thr.setCurrentIndex(2)  # Z
+        self.chk_inv_thr = QCheckBox("Ngược")
+        self.chk_inv_thr.setChecked(True)
+        cfg_layout.addWidget(self.combo_thr)
+        cfg_layout.addWidget(self.chk_inv_thr)
+
+        # Yaw (La bàn)
+        y_lbl = QLabel("Yaw (La bàn):")
+        y_lbl.setStyleSheet("color: #b0c4de; font-size: 8pt;")
+        cfg_layout.addWidget(y_lbl)
+        self.combo_yaw = QComboBox()
+        self.combo_yaw.addItems(axis_options)
+        self.combo_yaw.setCurrentIndex(3)  # R
+        self.chk_inv_yaw = QCheckBox("Ngược")
+        self.chk_inv_yaw.setChecked(False)
+        cfg_layout.addWidget(self.combo_yaw)
+        cfg_layout.addWidget(self.chk_inv_yaw)
+
+        self.combo_pitch.currentIndexChanged.connect(self._on_axis_config_changed)
+        self.combo_roll.currentIndexChanged.connect(self._on_axis_config_changed)
+        self.combo_thr.currentIndexChanged.connect(self._on_axis_config_changed)
+        self.combo_yaw.currentIndexChanged.connect(self._on_axis_config_changed)
+        self.chk_inv_pitch.toggled.connect(self._on_axis_config_changed)
+        self.chk_inv_roll.toggled.connect(self._on_axis_config_changed)
+        self.chk_inv_thr.toggled.connect(self._on_axis_config_changed)
+        self.chk_inv_yaw.toggled.connect(self._on_axis_config_changed)
+
+        main_layout.addWidget(cfg_frame)
+
+        # ----------------------------------------------------
+        # LIVE RAW 6-AXIS MONITOR
+        # ----------------------------------------------------
+        self.raw_monitor_label = QLabel("Raw HW Axes: X:0 | Y:0 | Z:0 | R:0 | U:0 | V:0")
+        self.raw_monitor_label.setStyleSheet(
+            "color: #607d8b; font-family: Consolas; font-size: 7.5pt; padding: 1px 4px;"
+        )
+        self.raw_monitor_label.setAlignment(Qt.AlignCenter)
+        main_layout.addWidget(self.raw_monitor_label)
 
         # Top row: Left Joystick | 8-Direction D-Pad | Right Joystick
         top_row = QHBoxLayout()
@@ -491,7 +610,87 @@ class JoystickPanel(QGroupBox):
     # TICK LOOP
     # ========================================================
 
+    def _on_axis_config_changed(self):
+        """Called when user changes channel assignment or inverts in UI."""
+        axes = ["X", "Y", "Z", "R", "U", "V"]
+        p_axis = axes[self.combo_pitch.currentIndex()]
+        r_axis = axes[self.combo_roll.currentIndex()]
+        t_axis = axes[self.combo_thr.currentIndex()]
+        y_axis = axes[self.combo_yaw.currentIndex()]
+
+        self.hw_joystick.set_axis_mapping(
+            pitch=p_axis,
+            roll=r_axis,
+            throttle=t_axis,
+            yaw=y_axis,
+        )
+        self.hw_joystick.set_inverts(
+            pitch=self.chk_inv_pitch.isChecked(),
+            roll=self.chk_inv_roll.isChecked(),
+            throttle=self.chk_inv_thr.isChecked(),
+            yaw=self.chk_inv_yaw.isChecked(),
+        )
+
     def _tick(self):
+        # ----------------------------------------------------
+        # 1. POLL HARDWARE JOYSTICK (TX16S / USB HID)
+        # ----------------------------------------------------
+        hw_data = self.hw_joystick.read()
+
+        if hw_data["connected"]:
+            self.hw_led.setText("●")
+            self.hw_led.setStyleSheet("color: #00e676; font-size: 11pt;")
+            self.hw_status_label.setText(f"🎮 Hardware: {hw_data['device_name']}")
+            self.hw_status_label.setStyleSheet("color: #00e676; font-size: 8.5pt; font-weight: bold;")
+
+            c_pitch = int(hw_data["pitch"] * 100)
+            c_roll = int(hw_data["roll"] * 100)
+            c_thr = int(hw_data["throttle"] * 100)
+            c_yaw = int(hw_data["yaw"] * 100)
+            self.hw_channels_label.setText(
+                f"Pitch: {c_pitch:+3d}% | Roll: {c_roll:+3d}% | Thr: {c_thr:+3d}% | Yaw: {c_yaw:+3d}%"
+            )
+
+            # Live 6-axis monitor
+            norm_map = hw_data.get("norm_axes", {})
+            raw_str = " | ".join(
+                f"{k}: {int(norm_map.get(k, 0.0) * 100):+3d}%"
+                for k in ["X", "Y", "Z", "R", "U", "V"]
+            )
+            self.raw_monitor_label.setText(f"Raw HW Axes: {raw_str}")
+
+            # Hardware switch & button events
+            if hw_data["switch_arm"] is True:
+                self._emit("arm", None)
+            elif hw_data["switch_arm"] is False:
+                self._emit("disarm", None)
+
+            if 1 in hw_data["pressed_buttons"]:
+                self._emit("takeoff", 10.0)
+            if 2 in hw_data["pressed_buttons"]:
+                self._emit("land", None)
+            if 3 in hw_data["pressed_buttons"]:
+                self._emit("rtl", None)
+            if 4 in hw_data["pressed_buttons"]:
+                self._on_stop_clicked()
+
+            # Mirror physical gimbals to on-screen virtual widgets if user not dragging with mouse
+            if (
+                self.isEnabled()
+                and not getattr(self.left_stick, "_dragging", False)
+                and not getattr(self.right_stick, "_dragging", False)
+                and not self._keys_pressed
+            ):
+                self.left_stick.set_value(hw_data["yaw"], hw_data["throttle"])
+                self.right_stick.set_value(hw_data["roll"], hw_data["pitch"])
+        else:
+            self.hw_led.setText("○")
+            self.hw_led.setStyleSheet("color: #78909c; font-size: 11pt;")
+            self.hw_status_label.setText("🎮 Hardware: No Controller (Using Virtual Stick / Keyboard)")
+            self.hw_status_label.setStyleSheet("color: #78909c; font-size: 8.5pt;")
+            self.hw_channels_label.setText("Pitch: -- | Roll: -- | Thr: -- | Yaw: --")
+            self.raw_monitor_label.setText("Raw HW Axes: Disconnected")
+
         if not self.isEnabled():
             return
 
