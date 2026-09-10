@@ -157,7 +157,7 @@ class MainWindow(QMainWindow):
         # ====================================================
 
         self.setWindowTitle(
-            "RIGEL UAV Simulator"
+            "MAVLink UAV Flight Simulator"
         )
 
         self.setMinimumSize(
@@ -215,7 +215,7 @@ class MainWindow(QMainWindow):
         root_layout.setContentsMargins(10, 10, 10, 10)
         root_layout.setSpacing(8)
 
-        title = QLabel("RIGEL UAV SIMULATOR")
+        title = QLabel("MAVLINK UAV FLIGHT SIMULATOR")
         title.setObjectName("appTitle")
         title.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         root_layout.addWidget(title)

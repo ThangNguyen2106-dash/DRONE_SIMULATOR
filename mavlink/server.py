@@ -17,7 +17,7 @@ class MAVLinkServer:
 
     def start(self):
         if self.running:return
-        self.running=True; self.s.running=True; self.thread=threading.Thread(target=self.loop,daemon=True,name='RIGEL-MAVLink'); self.thread.start()
+        self.running=True; self.s.running=True; self.thread=threading.Thread(target=self.loop,daemon=True,name='UAV-MAVLink'); self.thread.start()
         mav_log.info(CONN, f'TX -> {self.tx_host}:{self.tx_port} | RX <- {self.rx_host}:{self.rx_port}')
     def stop(self):
         self.running=False; self.s.running=False

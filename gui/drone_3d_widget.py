@@ -277,7 +277,7 @@ class Drone3DWidget(QWidget):
             ([17, 25, 26, 18], "top", QColor("#384a5c")),
             ([19, 21, 27, 27], "top", QColor("#3e5266")),
             ([18, 26, 20, 20], "top", QColor("#3e5266")),
-            ([24, 27, 26, 25], "canopy_accent", QColor("#ff6b22")),  # RIGEL accent
+            ([24, 27, 26, 25], "canopy_accent", QColor("#ff6b22")),  # Canopy accent
             ([21, 23, 22, 20], "top", QColor("#44596e")),
         ]
 
